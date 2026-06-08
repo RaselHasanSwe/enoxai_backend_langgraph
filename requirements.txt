@@ -1,0 +1,29 @@
+# Web framework
+fastapi==0.115.0
+uvicorn==0.30.6
+
+# LangChain + LangGraph
+langchain==0.3.0
+langchain-openai==0.2.0
+langchain-community==0.3.0
+langgraph==0.2.60
+langsmith>=0.1.126,<0.2.0
+
+# Memory
+langgraph-checkpoint-sqlite==2.0.11
+
+# Vector store
+faiss-cpu==1.8.0
+
+# BM25
+rank-bm25==0.2.2
+
+# HTTP client (used by tools)
+requests>=2.31.0
+
+# Settings
+pydantic==2.9.0
+pydantic-settings==2.5.2
+
+# Environment
+python-dotenv==1.0.1
