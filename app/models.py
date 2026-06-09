@@ -280,10 +280,22 @@ class ExchangeItem(BaseModel):
 # 5. Chat history models 
 # ===========================================================================
 
+class ChatUser(BaseModel):
+    id: int
+    name: str
+    email: str
+    session_id: str
+
+class ChatUserRequest(BaseModel):
+    name: str
+    email: str
+
+
 class ChatHistoryMessage(BaseModel):
     role: str
     message: str
     timestamp: str
+
 
 class ChatHistoryPaginationMeta(BaseModel):
     total_items: int
@@ -291,7 +303,9 @@ class ChatHistoryPaginationMeta(BaseModel):
     current_page: int
     page_size: int
 
+
 class ChatHistoryResponse(BaseModel):
+    user: Optional[ChatUser] = None
     data: List[ChatHistoryMessage]
     pagination: ChatHistoryPaginationMeta
 

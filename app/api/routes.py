@@ -21,9 +21,9 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.agent.graph import run_agent, stream_agent
-from app.models import ChatRequest, ChatResponse, HealthResponse, IndexResponse, ChatHistoryResponse
+from app.models import ChatRequest, ChatResponse, ChatUser, ChatUserRequest, HealthResponse, IndexResponse, ChatHistoryResponse
 from app.rag.engine import rag_engine
-from app.databases.chat_store import get_history
+from app.databases.chat_store import get_history, get_or_create_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -156,15 +156,31 @@ async def debug_retrieve(request: ChatRequest) -> dict:
         ],
     }
 
+
+@router.post("/chat/user", response_model=ChatUser, tags=["Chat"])
+async def user(request: ChatUserRequest) -> ChatUser:
+    """
+    Chat endpoint. before start chat session create or get user.
+    """
+    result = get_or_create_user(name=request.name, email=request.email)
+    
+    return ChatUser(
+        id=result["id"],
+        name=result["name"],
+        email=result["email"],
+        session_id=result["session_id"],
+    )
+
 @router.get("/chat/history", response_model=ChatHistoryResponse, tags=["Chat"])
 async def get_chat_history(
-    session_id: str = Query(..., description="Chat session id"),
+    user_id: int = Query(..., description="User ID"),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
 ) -> ChatHistoryResponse:
 
-    result = get_history(session_id=session_id, page=page)
+    result = get_history(user_id=user_id, page=page)
 
     return ChatHistoryResponse(
+        user=result["user"],
         data=result["data"],
         pagination=result["pagination"]
     )

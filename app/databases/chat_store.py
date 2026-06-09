@@ -2,6 +2,7 @@ from datetime import datetime
 from app.databases.config import get_connection
 import logging
 import math
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -13,19 +14,117 @@ def init_db():
     conn = None
     try:
         conn = get_connection()
+
+        # Enable foreign keys in SQLite
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        # Users table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                session_id TEXT UNIQUE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Chat messages table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                role TEXT,
-                message TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                message TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
+
         conn.commit()
         logger.info("DATABASE | initialized successfully")
+
     except Exception:
         logger.exception("DATABASE | initialization failed")
+
+    finally:
+        if conn:
+            conn.close()
+
+# ---------------------------
+# SAVE or GET USER
+# ---------------------------
+
+
+
+def get_or_create_user(name: str, email: str) -> dict:
+    conn = None
+
+    try:
+        conn = get_connection()
+
+        # Check existing user
+        cursor = conn.execute(
+            """
+            SELECT id, name, email, session_id
+            FROM users
+            WHERE email = ?
+            """,
+            (email,)
+        )
+
+        row = cursor.fetchone()
+
+        if row:
+            logger.info(
+                "DATABASE | existing user found | email=%s user_id=%s",
+                email,
+                row["id"]
+            )
+
+            return {
+                "id": row["id"],
+                "name": row["name"],
+                "email": row["email"],
+                "session_id": row["session_id"]
+            }
+
+        # Generate session ID
+        session_id = str(uuid4())
+
+        # Create user
+        cursor = conn.execute(
+            """
+            INSERT INTO users (name, email, session_id)
+            VALUES (?, ?, ?)
+            """,
+            (name, email, session_id)
+        )
+
+        conn.commit()
+
+        user_id = cursor.lastrowid
+
+        logger.info(
+            "DATABASE | new user created | user_id=%s email=%s",
+            user_id,
+            email
+        )
+
+        return {
+            "id": user_id,
+            "name": name,
+            "email": email,
+            "session_id": session_id
+        }
+
+    except Exception:
+        logger.exception(
+            "DATABASE | get_or_create_user failed | email=%s",
+            email
+        )
+        raise
+
     finally:
         if conn:
             conn.close()
@@ -36,29 +135,68 @@ def init_db():
 # ---------------------------
 def save_message(session_id: str, role: str, message: str):
     conn = None
+
     try:
         conn = get_connection()
 
+        # Find user by session_id
+        cursor = conn.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE session_id = ?
+            """,
+            (session_id,)
+        )
+
+        row = cursor.fetchone()
+
+        if not row:
+            logger.error(
+                "DATABASE | user not found | session_id=%s",
+                session_id
+            )
+            return False
+
+        user_id = row["id"]
+
+        # Save message
         conn.execute(
             """
-            INSERT INTO chat_messages (session_id, role, message, timestamp)
+            INSERT INTO chat_messages (
+                user_id,
+                role,
+                message,
+                timestamp
+            )
             VALUES (?, ?, ?, ?)
             """,
-            (session_id, role, message, datetime.utcnow())
+            (
+                user_id,
+                role,
+                message,
+                datetime.utcnow()
+            )
         )
 
         conn.commit()
 
         logger.info(
-            "DATABASE | message saved | session=%s role=%s length=%s",
-            session_id, role, len(message)
+            "DATABASE | message saved | user_id=%s role=%s length=%s",
+            user_id,
+            role,
+            len(message)
         )
+
+        return True
 
     except Exception:
         logger.exception(
-            "DATABASE | save message failed | session=%s role=%s",
-            session_id, role
+            "DATABASE | save message failed | session_id=%s role=%s",
+            session_id,
+            role
         )
+        raise
 
     finally:
         if conn:
@@ -70,58 +208,98 @@ def save_message(session_id: str, role: str, message: str):
 # ---------------------------
 PAGE_SIZE = 20
 
-def get_history(session_id: str, page: int = 1):
+def get_history(user_id: int, page: int = 1):
     conn = None
+
     try:
         conn = get_connection()
 
         # ------------------------
-        # 1. Count total messages
+        # 1. Get user
+        # ------------------------
+        user_cursor = conn.execute(
+            """
+            SELECT id, name, email, session_id
+            FROM users
+            WHERE id = ?
+            """,
+            (user_id,)
+        )
+
+        user = user_cursor.fetchone()
+
+        if not user:
+            logger.warning(
+                "DATABASE | user not found | user_id=%s",
+                user_id
+            )
+
+            return {
+                "user": None,
+                "data": [],
+                "pagination": {
+                    "total_items": 0,
+                    "total_pages": 0,
+                    "current_page": page,
+                    "page_size": PAGE_SIZE,
+                }
+            }
+
+        # ------------------------
+        # 2. Count total messages
         # ------------------------
         count_cursor = conn.execute(
             """
             SELECT COUNT(*) as total
             FROM chat_messages
-            WHERE session_id = ?
+            WHERE user_id = ?
             """,
-            (session_id,)
+            (user_id,)
         )
-        total_items = count_cursor.fetchone()["total"]
 
-        total_pages = math.ceil(total_items / PAGE_SIZE) if total_items else 1
+        total_items = count_cursor.fetchone()["total"]
+        total_pages = max(1, math.ceil(total_items / PAGE_SIZE))
 
         # ------------------------
-        # 2. Pagination calculation
+        # 3. Pagination calculation
         # ------------------------
         offset = (page - 1) * PAGE_SIZE
 
         # ------------------------
-        # 3. Fetch paginated data
+        # 4. Fetch messages
         # ------------------------
         cursor = conn.execute(
             """
             SELECT role, message, timestamp
             FROM chat_messages
-            WHERE session_id = ?
+            WHERE user_id = ?
             ORDER BY id DESC
             LIMIT ? OFFSET ?
             """,
-            (session_id, PAGE_SIZE, offset)
+            (user_id, PAGE_SIZE, offset)
         )
 
         rows = cursor.fetchall()
 
         logger.info(
-            "DATABASE | history fetched | session=%s page=%s count=%s",
-            session_id, page, len(rows)
+            "DATABASE | history fetched | user_id=%s page=%s count=%s",
+            user_id,
+            page,
+            len(rows)
         )
 
         return {
+            "user": {
+                "id": user["id"],
+                "name": user["name"],
+                "email": user["email"],
+                "session_id": user["session_id"]
+            },
             "data": [
                 {
                     "role": row["role"],
                     "message": row["message"],
-                    "timestamp": row["timestamp"],
+                    "timestamp": row["timestamp"]
                 }
                 for row in rows
             ],
@@ -134,8 +312,13 @@ def get_history(session_id: str, page: int = 1):
         }
 
     except Exception:
-        logger.exception("DATABASE | get history failed | session=%s", session_id)
+        logger.exception(
+            "DATABASE | get history failed | user_id=%s",
+            user_id
+        )
+
         return {
+            "user": None,
             "data": [],
             "pagination": {
                 "total_items": 0,
