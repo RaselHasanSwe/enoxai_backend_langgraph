@@ -3,6 +3,7 @@ from app.databases.config import get_connection
 import logging
 import math
 from uuid import uuid4
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +57,20 @@ def init_db():
 # ---------------------------
 
 
+def get_welcome_message(user_name: str) -> str:
+    messages = [
+        f"Hi **{user_name}**! I'm **EnoX**, your assistant from **PFD Enorsia UK LTD**. How may I help you today?",
+        f"Welcome back, **{user_name}**! I'm **EnoX** from **PFD Enorsia UK LTD**. Got a question about your order or anything else? I'm here!",
+        f"Hey **{user_name}**! Great to have you here. I'm **EnoX**, PFD Enorsia's virtual assistant. What can I do for you today?",
+        f"Hello **{user_name}**! I'm **EnoX** from **PFD Enorsia UK LTD**. Whether it's orders, returns, or products — I've got you covered. What do you need?",
+        f"Hi there, **{user_name}**! I'm **EnoX**, your dedicated assistant at **PFD Enorsia UK LTD**. How can I assist you today?",
+    ]
+    return random.choice(messages)
+
 
 def get_or_create_user(name: str, email: str) -> dict:
     conn = None
+    needs_greeting = False
 
     try:
         conn = get_connection()
@@ -81,6 +93,38 @@ def get_or_create_user(name: str, email: str) -> dict:
                 email,
                 row["id"]
             )
+            user_id = row["id"]
+
+            # Check last message timestamp
+            last_msg_cursor = conn.execute(
+                """
+                SELECT timestamp
+                FROM chat_messages
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (user_id,)
+            )
+
+            last_msg = last_msg_cursor.fetchone()
+
+            if last_msg is None:
+                # Existing user but no messages yet
+                needs_greeting = True
+            else:
+                last_time = datetime.fromisoformat(str(last_msg["timestamp"]))
+                hours_since = (datetime.utcnow() - last_time).total_seconds() / 3600
+                needs_greeting = hours_since >= 24
+
+            if needs_greeting:
+                welcome_message = get_welcome_message(name)
+                save_message(row["session_id"], "ai", welcome_message)
+
+            logger.info(
+                "DATABASE | existing user found | email=%s user_id=%s needs_greeting=%s",
+                email, row["id"], needs_greeting
+            )
 
             return {
                 "id": row["id"],
@@ -91,6 +135,7 @@ def get_or_create_user(name: str, email: str) -> dict:
 
         # Generate session ID
         session_id = str(uuid4())
+        needs_greeting = True
 
         # Create user
         cursor = conn.execute(
@@ -104,6 +149,10 @@ def get_or_create_user(name: str, email: str) -> dict:
         conn.commit()
 
         user_id = cursor.lastrowid
+
+        if needs_greeting:
+            welcome_message = get_welcome_message(name)
+            save_message(session_id, "ai", welcome_message)
 
         logger.info(
             "DATABASE | new user created | user_id=%s email=%s",
