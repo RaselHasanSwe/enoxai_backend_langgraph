@@ -159,19 +159,23 @@ def search_products(
 
     This tool performs semantic + keyword hybrid search and returns a JSON list
     of matching products with full details (name, price, colours, sizes, URL, etc.).
-
-    IMPORTANT — YOU MUST RETURN ONLY VALID JSON in this format:
-    {
-      "status": true,
-      "message": "Found X products matching your search.",
-      "query_understood": "<brief restatement of what was searched>",
-      "filters_applied": { ... },
-      "products": [ { ...product fields... } ]
-    }
     """
+    logger.info("PRODUCT-SEARCH | search_products() called with query=%s and filters=%s", query, {
+        k: v for k, v in {
+            "department": department,
+            "category": category,
+            "color": color,
+            "size": size,
+            "occasion": occasion,
+            "min_price": min_price,
+            "max_price": max_price,
+            "in_stock_only": in_stock_only,
+        }.items() if v is not None
+    })
     from app.rag.product_engine import product_rag_engine
 
     if not product_rag_engine.is_ready:
+        logger.info("PRODUCT-SEARCH | Product catalogue is not available right now product_rag_engine not ready.")
         return _to_json({
             "status": False,
             "message": "Product catalogue is not available right now. Please try again later.",
@@ -205,6 +209,7 @@ def search_products(
     )
 
     if not products:
+        logger.info("PRODUCT-SEARCH | No products found matching query=%s and filters=%s", query, filters_applied)
         return _to_json({
             "status": False,
             "message": (
@@ -245,13 +250,17 @@ def search_products(
             "neckline":        attrs.get("neckline"),
         })
 
-    return _to_json({
+    json_response = _to_json({
         "status": True,
         "message": f"Found {len(slim_products)} product(s) matching your search.",
         "query_understood": query,
         "filters_applied": filters_applied,
         "products": slim_products,
     })
+
+    logger.info("PRODUCT-SEARCH | search_products() returned %s", json_response)
+
+    return json_response
 
 
 @tool("what_does_enorsia_sale")

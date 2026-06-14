@@ -13,6 +13,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Any, Optional, get_args
+import sys
 
 import requests
 
@@ -23,21 +24,21 @@ from app.models import CATEGORY_DESCRIPTIONS
 # ---------------------------------------------------------------------------
 
 def configure_logging() -> None:
-    """
-    Set up daily rotating file + console logging.
-    Call this once at application startup (e.g. in main.py or app/__init__.py).
-    """
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
-
     log_file = os.path.join(log_dir, f"app_{datetime.now().strftime('%Y-%m-%d')}.log")
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
         handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(),
+            logging.FileHandler(log_file, encoding="utf-8"),   # explicit utf-8
+            logging.StreamHandler(stream=open(            
+                sys.stdout.fileno(),
+                mode="w",
+                encoding="utf-8",
+                closefd=False,
+            )),
         ],
     )
 

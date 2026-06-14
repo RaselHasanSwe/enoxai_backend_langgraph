@@ -1,7 +1,9 @@
 __pycache__
 *.pyc
 /data/faiss_index/
+/data/product_faiss_index/
 /data/enoxai.db
+/data/products.json
 logs/
 venv/
 .venv/
