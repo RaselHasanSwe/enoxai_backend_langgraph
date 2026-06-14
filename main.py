@@ -22,6 +22,7 @@ from app.config import get_settings
 from app.rag.engine import rag_engine
 from app.utils.utils import configure_logging
 from app.databases.chat_store import init_db
+from app.rag.product_engine import product_rag_engine
 
 settings = get_settings()
 
@@ -43,6 +44,15 @@ async def lifespan(app: FastAPI):
 
     print(f"[Startup] Ready. {rag_engine.total_docs} documents indexed.")
     #print(f"[Startup] Categories: {rag_engine.categories}")
+
+    print("[Startup] Loading product data...")
+    product_rag_engine.load_product_data(settings.product_data_path)
+    product_loaded = product_rag_engine.load_index()
+    if not product_loaded:
+        print("[Startup] Building fresh product index...")
+        product_rag_engine.build_index()
+    print(f"[Startup] Products ready. {product_rag_engine.total_products} products indexed.")
+    
 
     print("[Startup] Initializing chat message database...")
 

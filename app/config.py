@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # RAG tuning
     faq_data_path: str = "data/faq.json"
     faiss_index_path: str = "data/faiss_index"
+    product_faiss_index_path: str = "data/product_faiss_index"
+    product_data_path: str = "data/products.json"
     top_k_results: int = 4
     bm25_weight: float = 0.4
     semantic_weight: float = 0.6

@@ -49,6 +49,7 @@ from app.models import (
     SupportTicketCategory,
     UpdateShippingInput,
     ValidateDiscountInput,
+    ProductSearchInput,
 )
 from app.utils.utils import error_response, post_to_api, sanitize_optional_str, CREATE_SUPPORT_TICKET_DOC
 
@@ -127,6 +128,130 @@ def search_knowledge_base(
         })
 
     return _to_json({"status": True, "message": "Knowledge base results", "data": results})
+
+# ===========================================================================
+# Tool — Product search (RAG over product catalogue)
+# ===========================================================================
+
+@tool("search_products", args_schema=ProductSearchInput)
+def search_products(
+    query: str,
+    department: Optional[str] = None,
+    category: Optional[str] = None,
+    color: Optional[str] = None,
+    size: Optional[str] = None,
+    occasion: Optional[str] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    in_stock_only: bool = True,
+    top_k: int = 5,
+) -> str:
+    """
+    Search the Enorsia product catalogue for items matching the customer's query.
+
+    Use this tool whenever the customer asks to find, browse, or discover products.
+    Examples:
+      - "Show me black bodysuits"
+      - "Do you have red summer dresses under £40?"
+      - "I need something for a party in size 12"
+      - "What activewear do you sell?"
+      - "Looking for a sleeveless top for holiday"
+
+    This tool performs semantic + keyword hybrid search and returns a JSON list
+    of matching products with full details (name, price, colours, sizes, URL, etc.).
+
+    IMPORTANT — YOU MUST RETURN ONLY VALID JSON in this format:
+    {
+      "status": true,
+      "message": "Found X products matching your search.",
+      "query_understood": "<brief restatement of what was searched>",
+      "filters_applied": { ... },
+      "products": [ { ...product fields... } ]
+    }
+    """
+    from app.rag.product_engine import product_rag_engine
+
+    if not product_rag_engine.is_ready:
+        return _to_json({
+            "status": False,
+            "message": "Product catalogue is not available right now. Please try again later.",
+            "products": []
+        })
+
+    filters_applied = {
+        k: v for k, v in {
+            "department": department,
+            "category": category,
+            "color": color,
+            "size": size,
+            "occasion": occasion,
+            "min_price": min_price,
+            "max_price": max_price,
+            "in_stock_only": in_stock_only,
+        }.items() if v is not None and v is not False
+    }
+
+    products = product_rag_engine.retrieve(
+        query=query,
+        department=department,
+        category=category,
+        color=color,
+        size=size,
+        occasion=occasion,
+        min_price=min_price,
+        max_price=max_price,
+        in_stock_only=in_stock_only,
+        top_k=top_k,
+    )
+
+    if not products:
+        return _to_json({
+            "status": False,
+            "message": (
+                "No products found matching your search. "
+                "Try broadening the query or removing some filters."
+            ),
+            "query_understood": query,
+            "filters_applied": filters_applied,
+            "products": []
+        })
+
+    # ── Slim down the payload — only what the LLM needs ───────────────────
+    slim_products = []
+    for p in products:
+        attrs = p.get("attributes", {})
+        slim_products.append({
+            "product_id":      p["product_id"],
+            "product_name":    p["product_name"],
+            "product_url":     p["product_url"],
+            "product_image":   p["product_image"],
+            "category":        p.get("category"),
+            "department":      p.get("department"),
+            "price":           p.get("price"),
+            "currency":        p.get("currency", "GBP"),
+            "discount_price":  p.get("discount_price"),
+            "discount_percent": p.get("discount_percent"),
+            "has_discount":    p.get("has_discount", False),
+            "in_stock":        p.get("in_stock", True),
+            "rating":          p.get("rating"),
+            "total_reviews":   p.get("total_reviews"),
+            "colors":          attrs.get("colors", []),
+            "sizes":           attrs.get("sizes", []),
+            "fabric":          attrs.get("fabric"),
+            "fit":             attrs.get("fit"),
+            "sleeve":          attrs.get("sleeve"),
+            "season":          attrs.get("season"),
+            "occasion":        attrs.get("occasion", []),
+            "neckline":        attrs.get("neckline"),
+        })
+
+    return _to_json({
+        "status": True,
+        "message": f"Found {len(slim_products)} product(s) matching your search.",
+        "query_understood": query,
+        "filters_applied": filters_applied,
+        "products": slim_products,
+    })
 
 
 @tool("what_does_enorsia_sale")
@@ -581,4 +706,5 @@ ALL_TOOLS = [
     validate_discount_code,  # Tool 13 — Store ops
     create_support_ticket,   # Tool 14
     what_does_enorsia_sale,   # Tool 15
+    search_products,            # Tool 16 — RAG (product catalogue)
 ]

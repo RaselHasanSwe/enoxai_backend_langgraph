@@ -310,6 +310,66 @@ class ChatHistoryResponse(BaseModel):
     pagination: ChatHistoryPaginationMeta
 
 
+
+# ===========================================================================
+# 6. Product rag models  
+# ===========================================================================
+
+class ProductSearchInput(BaseModel):
+    """Input schema for the search_products tool."""
+    query: str = Field(
+        description=(
+            "Natural-language product search query. "
+            "Examples: 'red summer dress', 'black bodysuit for going out', "
+            "'affordable party tops under £30'."
+        )
+    )
+    department: Optional[str] = Field(
+        default=None,
+        description="Filter by department, e.g. 'Women', 'Men'. Leave None if not mentioned."
+    )
+    category: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filter by category, e.g. 'Jumpsuits and Playsuits', 'Tops', 'Dresses'. "
+            "Leave None if not clear from the query."
+        )
+    )
+    color: Optional[str] = Field(
+        default=None,
+        description="Specific colour the customer wants, e.g. 'Black', 'Red'."
+    )
+    size: Optional[str] = Field(
+        default=None,
+        description="UK clothing size, e.g. '8', '12', '16'. Leave None if not mentioned."
+    )
+    occasion: Optional[str] = Field(
+        default=None,
+        description=(
+            "Occasion or use-case filter, e.g. 'Party Wear', 'Casual', 'Holiday', "
+            "'Going Out', 'Activewear'."
+        )
+    )
+    min_price: Optional[float] = Field(
+        default=None,
+        description="Minimum price in GBP. Infer from phrases like 'over £20'."
+    )
+    max_price: Optional[float] = Field(
+        default=None,
+        description="Maximum price in GBP. Infer from phrases like 'under £40', 'cheap', 'affordable'."
+    )
+    in_stock_only: bool = Field(
+        default=True,
+        description="Return only in-stock products. Default True."
+    )
+    top_k: int = Field(
+        default=5,
+        description="Number of products to return (1–10). Default 5.",
+        ge=1,
+        le=10,
+    )
+
+
 # Resolve forward references
 CreateReturnInput.model_rebuild()
 SubmitExchangeInput.model_rebuild()
