@@ -84,6 +84,7 @@ async def stream_agent(message: str, session_id: str) -> AsyncIterator[str | dic
     config: RunnableConfig = {"configurable": {"thread_id": session_id}}
     tool_calls: list[str] = []
     agent_response = ""
+    tool_name = None  # track current tool to know when to capture product data
 
     # Collect search_products results emitted by ToolMessage nodes
     # so we can forward full product data to the frontend.
@@ -122,7 +123,9 @@ async def stream_agent(message: str, session_id: str) -> AsyncIterator[str | dic
                 ):
                     content_str = msg_chunk.content
                     if isinstance(content_str, str) and content_str:
-                        yield content_str
+                        # if tool name is not search_products then yield
+                        if tool_name != "search_products":
+                            yield content_str
                         agent_response += content_str
 
                 if msg_chunk.tool_calls:
@@ -131,7 +134,44 @@ async def stream_agent(message: str, session_id: str) -> AsyncIterator[str | dic
 
         # ── After stream ends, emit product data if we have it ────────────
         if product_data_to_emit is not None:
-            yield {"__product_data__": product_data_to_emit}
+            # Extract product titles from AI response
+            product_titles = []
+            try:
+                response_json = json.loads(agent_response)
+                if isinstance(response_json, dict) and "products" in response_json:
+                    product_titles = response_json["products"]
+            except:
+                pass
+
+            # Filter products if we have titles
+            if product_titles:
+                filtered_products = []
+                used_ids = set()
+                for title in product_titles:
+                    clean_title = title.lower().strip()
+                    for product in product_data_to_emit:
+                        product_name = product.get("product_name", "").lower().strip()
+                        if (product_name == clean_title or
+                                product_name in clean_title or
+                                clean_title in product_name):
+                            pid = product.get("product_id")
+                            if pid and pid not in used_ids:
+                                filtered_products.append(product)
+                                used_ids.add(pid)
+                                break
+
+                # Update agent_response with filtered products
+                try:
+                    response_json = json.loads(agent_response)
+                    if isinstance(response_json, dict):
+                        response_json["product_data"] = filtered_products
+                        agent_response = json.dumps(response_json)
+                except:
+                    pass
+
+                yield {"__product_data__": filtered_products}
+            else:
+                yield {"__product_data__": product_data_to_emit}
 
     except Exception:
         logger.exception("AGENT FAILED:stream_agent()  | session=%s", session_id)
