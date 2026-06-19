@@ -1,0 +1,110 @@
+Product RAG TEST:
+Here's a comprehensive list of every type of question a real customer would ask about a product catalogue, organized by intent:
+
+🔍 Direct Product Search
+
+"Show me cargo trousers for boys"
+"I'm looking for boys bottoms"
+"What trousers do you have for kids?"
+"Do you sell children's pants?"
+
+🎨 Color-Based
+
+"Show me cargo trousers in navy"
+"Do you have these in olive green?"
+"What colors does the boys cargo trouser come in?"
+"I want something white for my son"
+"Any dark colored trousers for boys?"
+
+📏 Size-Based
+
+"Do you have cargo trousers for a 5 year old?"
+"What sizes are available for boys trousers?"
+"Do you stock age 3 trousers?"
+"My son is 9, do you have his size?"
+"Is size 7 years available?"
+
+💰 Price-Based
+
+"Show me boys trousers under £35"
+"What's your cheapest bottom for boys?"
+"Do you have anything for boys between £20 and £40?"
+"Is the cargo trouser on sale?"
+"Any discounts on kids clothing?"
+
+👗 Occasion-Based
+
+"What should my son wear to a party?"
+"Smart clothes for boys for a special occasion"
+"Casual trousers for boys for holiday"
+"Something my son can wear on a night out"
+"Boys clothes suitable for school events"
+"Smart casual outfit ideas for boys"
+
+🧵 Fabric / Material
+
+"Do you have cotton trousers for boys?"
+"What material is the boys cargo trouser made from?"
+"I need something stretchy for my active son"
+"Do you have non-synthetic kids trousers?"
+"My son has sensitive skin, what fabric is this?"
+"Is there any spandex or stretch in the fabric?"
+
+🌦️ Season / Weather
+
+"What can my son wear in summer?"
+"Year-round trousers for boys"
+"Something my son can wear all seasons"
+"Light trousers for warm weather for boys"
+
+🪡 Fit / Style
+
+"Slim fit trousers for boys"
+"Are these fitted or baggy?"
+"Cargo style trousers for kids"
+"Trousers with pockets for boys"
+"Active fit bottoms for boys"
+
+🏷️ Brand / Department
+
+"What boys clothing do you sell?"
+"Do you have an Enorsia kids range?"
+"Show me your boys department"
+"What categories do you have for children?"
+
+⭐ Reviews / Ratings
+
+"What are the best rated boys trousers?"
+"Are there any reviews on the cargo trousers?"
+"Most popular boys trousers on your site?"
+
+🔀 Multi-Filter Combinations (the most common real-world queries)
+
+"Navy cargo trousers for a 5 year old boy under £35"
+"Cotton slim fit trousers for boys in size 7 years"
+"Smart casual boys trousers in white for a holiday"
+"Affordable stretch trousers for active boys age 6"
+"Boys party trousers in olive, size 4 years"
+"Something smart for my 7 year old son, not too expensive"
+
+💬 Natural / Conversational (hardest — tests semantic understanding)
+
+"My son needs something to wear to his cousin's birthday"
+"Looking for a versatile bottom my boy can dress up or down"
+"My son is really active, needs something comfortable but smart"
+"What would go with a white shirt for a boy?"
+"I want something practical for my son that still looks good"
+"Something my son can wear from school to a party"
+
+📦 Stock / Availability
+
+"Are the navy cargo trousers in stock in age 5?"
+"Is this available right now?"
+"Do you have this in stock or is it sold out?"
+
+🔁 Comparison / Alternative
+
+"What's similar to the boys cargo trouser?"
+"Do you have anything like this but cheaper?"
+"Are there other styles of boys trousers?"
+"Show me alternatives to the cargo style"
