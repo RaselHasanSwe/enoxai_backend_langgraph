@@ -10,6 +10,11 @@ Endpoints:
   GET  /index/status  — index health
   GET  /health        — liveness probe
   POST /debug/retrieve — raw retrieval without LLM (dev only)
+
+SSE protocol (chat/stream):
+  Normal token  →  data: {"token": "..."}
+  Product data  →  data: {"product_data": [...]}   ← only when search_products fires
+  Both events arrive on the same stream; the frontend handles each type.
 """
 
 from __future__ import annotations
@@ -21,7 +26,10 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.agent.graph import run_agent, stream_agent
-from app.models import ChatRequest, ChatResponse, ChatUser, ChatUserRequest, HealthResponse, IndexResponse, ChatHistoryResponse
+from app.models import (
+    ChatRequest, ChatResponse, ChatUser, ChatUserRequest,
+    HealthResponse, IndexResponse, ChatHistoryResponse,
+)
 from app.rag.engine import rag_engine
 from app.databases.chat_store import get_history, get_or_create_user
 
@@ -37,9 +45,6 @@ router = APIRouter()
 async def chat(request: ChatRequest) -> ChatResponse:
     """
     Send a message and receive a full JSON response.
-
-    The agent decides internally whether to call the knowledge base,
-    order tools, or both — no routing logic on this side.
     """
     try:
         result = await run_agent(
@@ -64,10 +69,14 @@ async def chat(request: ChatRequest) -> ChatResponse:
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     async def event_stream():
         try:
-            tool_calls: list[str] = []
+            async for chunk in stream_agent(request.message, request.session_id):
+                if isinstance(chunk, str):
+                    # Normal text token
+                    yield f"data: {json.dumps({'token': chunk})}\n\n"
 
-            async for token in stream_agent(request.message, request.session_id):
-                yield f"data: {json.dumps({'token': token})}\n\n"
+                elif isinstance(chunk, dict) and "__product_data__" in chunk:
+                    # Rich product data — separate SSE event type
+                    yield f"data: {json.dumps({'product_data': chunk['__product_data__']})}\n\n"
 
         except Exception as exc:
             logger.exception("Streaming error | session=%s", request.session_id)
@@ -78,6 +87,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
 
 # ---------------------------------------------------------------------------
 # Index management
@@ -157,13 +167,14 @@ async def debug_retrieve(request: ChatRequest) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# User / History
+# ---------------------------------------------------------------------------
+
 @router.post("/chat/user", response_model=ChatUser, tags=["Chat"])
 async def user(request: ChatUserRequest) -> ChatUser:
-    """
-    Chat endpoint. before start chat session create or get user.
-    """
+    """Create or retrieve a user session before starting a chat."""
     result = get_or_create_user(name=request.name, email=request.email)
-    
     return ChatUser(
         id=result["id"],
         name=result["name"],
@@ -171,16 +182,15 @@ async def user(request: ChatUserRequest) -> ChatUser:
         session_id=result["session_id"],
     )
 
+
 @router.get("/chat/history", response_model=ChatHistoryResponse, tags=["Chat"])
 async def get_chat_history(
     user_id: int = Query(..., description="User ID"),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
 ) -> ChatHistoryResponse:
-
     result = get_history(user_id=user_id, page=page)
-
     return ChatHistoryResponse(
         user=result["user"],
         data=result["data"],
-        pagination=result["pagination"]
+        pagination=result["pagination"],
     )

@@ -8,6 +8,13 @@ The LLM decides in one reasoning loop which tool(s) to call, in what order,
 and when it has enough information to give a final answer.
 
 No router. No classifier. No separate code paths.
+
+Product search special handling:
+  - When search_products fires, its raw JSON result is captured.
+  - The SSE stream emits an extra event:  data: {"product_data": [...]}
+  - The LLM is instructed to respond with a compact JSON envelope:
+      {"products": ["Title A", "Title B"]}
+    so the frontend can match titles to the rich product_data payload.
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ from langchain.schema import HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.runnables import RunnableConfig
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain.globals import set_verbose, set_debug
 
 from app.config import get_settings
@@ -58,45 +65,130 @@ _agent = create_react_agent(model=_llm, tools=ALL_TOOLS, state_modifier=_SYSTEM_
 # Public interface
 # ---------------------------------------------------------------------------
 
-async def stream_agent(message: str, session_id: str) -> AsyncIterator[str]:
+async def stream_agent(message: str, session_id: str) -> AsyncIterator[str | dict]:
     """
-    Stream the agent's token output as an async iterator of text chunks.
+    Stream the agent's output as an async iterator.
+
+    Yields either:
+      - str   — a text token to be forwarded as  data: {"token": "..."}
+      - dict  — a product payload to be forwarded as  data: {"product_data": [...]}
+
+    The caller (routes.py) is responsible for JSON-encoding each yield.
     """
-    logger.info("USER MESSAGE:stream_agent()  | session=%s message=%s", session_id, message)
+    logger.info(
+        "USER MESSAGE:stream_agent()  | session=%s message=%s",
+        session_id, message,
+    )
     save_message(session_id, "user", message)
 
-    config: RunnableConfig = {
-        "configurable": {"thread_id": session_id}
-    }
-    tool_calls = []
+    config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+    tool_calls: list[str] = []
     agent_response = ""
+    tool_name = None  # track current tool to know when to capture product data
+
+    # Collect search_products results emitted by ToolMessage nodes
+    # so we can forward full product data to the frontend.
+    product_data_to_emit: list[dict] | None = None
 
     try:
         async for msg_chunk, metadata in _agent.astream(
-            {"messages": [HumanMessage(content=message)]}, 
-            config=config, 
-            stream_mode="messages"
+            {"messages": [HumanMessage(content=message)]},
+            config=config,
+            stream_mode="messages",
         ):
+            # ── Tool result interception ──────────────────────────────────
+            if isinstance(msg_chunk, ToolMessage):
+                tool_name = msg_chunk.name  # set by LangGraph on ToolMessage
+                if tool_name == "search_products":
+                    try:
+                        payload = json.loads(msg_chunk.content)
+                        if payload.get("status") and payload.get("products"):
+                            product_data_to_emit = payload["products"]
+                            logger.info(
+                                "PRODUCT-STREAM | captured %d products for session=%s",
+                                len(product_data_to_emit), session_id,
+                            )
+                    except (json.JSONDecodeError, AttributeError):
+                        logger.warning(
+                            "PRODUCT-STREAM | failed to parse search_products result for session=%s",
+                            session_id,
+                        )
+
+            # ── AI text tokens ────────────────────────────────────────────
             if isinstance(msg_chunk, AIMessageChunk):
-                if (msg_chunk.content and not msg_chunk.tool_calls and not msg_chunk.tool_call_chunks):
+                if (
+                    msg_chunk.content
+                    and not msg_chunk.tool_calls
+                    and not msg_chunk.tool_call_chunks
+                ):
                     content_str = msg_chunk.content
                     if isinstance(content_str, str) and content_str:
-                        yield content_str
+                        # if tool name is not search_products then yield
+                        if tool_name != "search_products":
+                            yield content_str
                         agent_response += content_str
 
                 if msg_chunk.tool_calls:
                     for tc in msg_chunk.tool_calls:
                         tool_calls.append(tc.get("name", "unknown"))
-    except Exception as e:
+
+        # ── After stream ends, emit product data if we have it ────────────
+        if product_data_to_emit is not None:
+            # Extract product titles from AI response
+            product_titles = []
+            try:
+                response_json = json.loads(agent_response)
+                if isinstance(response_json, dict) and "products" in response_json:
+                    product_titles = response_json["products"]
+            except:
+                pass
+
+            # Filter products if we have titles
+            if product_titles:
+                filtered_products = []
+                used_ids = set()
+                for title in product_titles:
+                    clean_title = title.lower().strip()
+                    for product in product_data_to_emit:
+                        product_name = product.get("product_name", "").lower().strip()
+                        if (product_name == clean_title or
+                                product_name in clean_title or
+                                clean_title in product_name):
+                            pid = product.get("product_id")
+                            if pid and pid not in used_ids:
+                                filtered_products.append(product)
+                                used_ids.add(pid)
+                                break
+
+                # Update agent_response with filtered products
+                try:
+                    response_json = json.loads(agent_response)
+                    if isinstance(response_json, dict):
+                        response_json["product_data"] = filtered_products
+                        agent_response = json.dumps(response_json)
+                except:
+                    pass
+
+                yield {"__product_data__": filtered_products}
+            else:
+                yield {"__product_data__": product_data_to_emit}
+
+    except Exception:
         logger.exception("AGENT FAILED:stream_agent()  | session=%s", session_id)
         yield "\nSorry, something went wrong."
     finally:
         if agent_response.strip():
-            save_message(session_id, "ai", agent_response)   
+            save_message(session_id, "ai", agent_response)
 
-        logger.info("AGENT RESPONSE:stream_agent()  | session=%s response=%s", session_id, agent_response)
-        logger.info("AGENT TOOLS USED:stream_agent()  | session=%s tools=%s", session_id, tool_calls)
-            
+        logger.info(
+            "AGENT RESPONSE:stream_agent()  | session=%s response=%s",
+            session_id, agent_response,
+        )
+        logger.info(
+            "AGENT TOOLS USED:stream_agent()  | session=%s tools=%s",
+            session_id, tool_calls,
+        )
+
 
 async def run_agent(message: str, session_id: str) -> dict:
     """
@@ -108,33 +200,46 @@ async def run_agent(message: str, session_id: str) -> dict:
             "tool_calls": list — names of every tool that fired this turn,
         }
     """
-    logger.info("USER MESSAGE:run_agent()  | session=%s message=%s", session_id, message[:80])
+    logger.info(
+        "USER MESSAGE:run_agent()  | session=%s message=%s",
+        session_id, message[:80],
+    )
     save_message(session_id, "user", message)
     config: RunnableConfig = {"configurable": {"thread_id": session_id}}
-    
+
     answer = ""
     tool_calls: list[str] = []
-    
+
     try:
         result = await _agent.ainvoke(
             {"messages": [HumanMessage(content=message)]},
-            config=config
+            config=config,
         )
         for msg in result.get("messages", []):
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_calls.append(tc.get("name", "unknown"))
 
-            if hasattr(msg, "content") and msg.content and not getattr(msg, "tool_calls", None):
+            if (
+                hasattr(msg, "content")
+                and msg.content
+                and not getattr(msg, "tool_calls", None)
+            ):
                 answer = msg.content
 
-    except Exception as e:
+    except Exception:
         logger.exception("AGENT FAILED:run_agent()  | session=%s", session_id)
         answer = "Sorry, something went wrong."
     finally:
         if answer.strip():
             save_message(session_id, "ai", answer)
-        logger.info("AGENT RESPONSE:run_agent()  | session=%s response=%s", session_id, answer)
-        logger.info("AGENT TOOLS USED:run_agent()  | session=%s tools=%s", session_id, tool_calls)
-        
+        logger.info(
+            "AGENT RESPONSE:run_agent()  | session=%s response=%s",
+            session_id, answer,
+        )
+        logger.info(
+            "AGENT TOOLS USED:run_agent()  | session=%s tools=%s",
+            session_id, tool_calls,
+        )
+
     return {"answer": answer, "tool_calls": tool_calls}
