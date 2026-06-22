@@ -23,6 +23,8 @@ from app.rag.engine import rag_engine
 from app.utils.utils import configure_logging
 from app.databases.chat_store import init_db
 from app.rag.product_engine import product_rag_engine
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 settings = get_settings()
 
@@ -99,6 +101,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def maintenance_mode(request: Request, call_next):
+    # Allow health check and docs if needed
+    allowed_paths = [
+        
+    ]
+
+    if settings.maintenance_mode and request.url.path not in allowed_paths:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "maintenance",
+                "message": "System is currently under maintenance. Please try again later."
+            }
+        )
+
+    response = await call_next(request)
+    return response
 
 app.include_router(router, prefix="/api/v1")
 

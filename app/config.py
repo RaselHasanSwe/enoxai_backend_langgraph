@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    maintenance_mode: bool = False
     # OpenAI
     openai_api_key: SecretStr = SecretStr("")
     openai_model: str = "gpt-4o"

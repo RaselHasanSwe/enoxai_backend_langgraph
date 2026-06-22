@@ -290,3 +290,11 @@ sudo nginx -t
 sudo systemctl restart enoxai-backend
 sudo systemctl reload nginx
 ```
+
+
+### MAINTENANCE MODE
+Open .env then 
+```bash
+MAINTENANCE_MODE=false | true
+sudo systemctl restart enoxai-backend
+```
