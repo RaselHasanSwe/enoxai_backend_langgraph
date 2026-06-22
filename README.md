@@ -103,7 +103,9 @@ wholesale_and_b2b
 backend/
 ├── data/
 │   ├── faq.json               # FAQ knowledge base
+|   ├── products.json          # Product knowledge base
 │   └── faiss_index/           # auto-created on first run
+|   |__ product_faiss_index    #auto-created on first run
 |   └── enoxai.db              # Chat History database auto-created on first run 
 │
 ├── app/
@@ -118,7 +120,8 @@ backend/
 │   │
 │   ├── rag/
 │   │   ├── __init__.py
-│   │   └── engine.py          # FAISS + BM25 hybrid retrieval engine
+│   │   └── engine.py          # FAISS + BM25 hybrid retrieval engine for FAQ
+|   |   └── product_engine.py  # FAISS + BM25 hybrid retrieval engine for product
 │   │
 │   ├── tools/
 │   │   ├── __init__.py
