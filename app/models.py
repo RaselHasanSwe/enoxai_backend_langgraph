@@ -325,8 +325,7 @@ class ProductSearchInput(BaseModel):
         )
     )
     department: Optional[str] = Field(
-        default=None,
-        description="Filter by department, e.g. 'Women', 'Men'. Leave None if not mentioned."
+        description="Filter by department. Accepted values are: women, men, girls, and boys."
     )
     category: Optional[str] = Field(
         default=None,

@@ -136,7 +136,7 @@ def search_knowledge_base(
 @tool("search_products", args_schema=ProductSearchInput)
 def search_products(
     query: str,
-    department: Optional[str] = None,
+    department: str,
     category: Optional[str] = None,
     color: Optional[str] = None,
     size: Optional[str] = None,
@@ -147,18 +147,25 @@ def search_products(
     top_k: int = 5,
 ) -> str:
     """
-    Search the Enorsia product catalogue for items matching the customer's query.
+    Search the Enorsia product catalogue for items matching the customer's request.
 
-    Use this tool whenever the customer asks to find, browse, or discover products.
+    Use this tool whenever the customer wants to find, browse, or discover products.
+
     Examples:
-      - "Show me black bodysuits"
-      - "Do you have red summer dresses under £40?"
-      - "I need something for a party in size 12"
-      - "What activewear do you sell?"
-      - "Looking for a sleeveless top for holiday"
+    - "Show me black bodysuits"
+    - "Do you have red summer dresses under £40?"
+    - "I need something for a party in size 12"
+    - "What activewear do you sell?"
+    - "Looking for a sleeveless top for holiday"
 
-    This tool performs semantic + keyword hybrid search and returns a JSON list
-    of matching products with full details (name, price, colours, sizes, URL, etc.).
+    Important:
+    - The `department` is required and must be one of: `women`, `men`, `girls`, or `boys`.
+    - If the customer's request does not clearly indicate the department, do **not** guess. Ask a clarifying question first, such as:
+    - "Are you looking for women's, men's, girls', or boys' clothing?"
+    - Once the department is known, use it when calling this tool.
+    - Apply any other filters mentioned by the customer, such as category, colour, size, occasion, price range, or stock availability.
+
+    This tool performs a semantic + keyword hybrid search and returns a JSON list of matching products with full details, including name, price, colours, sizes, images, and product URL.
     """
     logger.info("PRODUCT-SEARCH | search_products() called with query=%s and filters=%s", query, {
         k: v for k, v in {
