@@ -51,6 +51,8 @@ class ChatRequest(BaseModel):
         default=None,
         description="Filter knowledge base search to a specific FAQ category.",
     )
+    image_base64: Optional[str] = Field(default=None)
+    image_media_type: Optional[str] = Field(default="image/jpeg")
 
 
 class ChatResponse(BaseModel):
