@@ -23,6 +23,7 @@ from app.rag.engine import rag_engine
 from app.utils.utils import configure_logging
 from app.databases.chat_store import init_db
 from app.rag.product_engine import product_rag_engine
+from app.rag.product_image_engine import product_image_engine
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -55,6 +56,23 @@ async def lifespan(app: FastAPI):
         product_rag_engine.build_index()
     print(f"[Startup] Products ready. {product_rag_engine.total_products} products indexed.")
     
+    # ── NEW: Product Image (CLIP) engine ────────────────────────────────────
+    print("[Startup] Loading CLIP model for image search...")
+    product_image_engine.load_model()
+ 
+    print("[Startup] Loading product image data...")
+    product_image_engine.load_product_data(settings.image_json_path)
+ 
+    image_index_loaded = product_image_engine.load_index()
+    
+    if not image_index_loaded:
+        print("[Startup] ⚠️  No image index found. Build one via POST /api/v1/image-index/build")
+        # NOTE: unlike text RAG, we do NOT auto-build here because CLIP indexing
+        # downloads every product image over HTTP — too slow/expensive for every
+        # cold start. Build explicitly once via the endpoint, then it persists.
+    print(f"[Startup] Image search ready. {product_image_engine.total_products} products indexed.")
+
+
 
     print("[Startup] Initializing chat message database...")
 

@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import json
 import logging
-
+import base64
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
@@ -29,12 +30,22 @@ from app.agent.graph import run_agent, stream_agent
 from app.models import (
     ChatRequest, ChatResponse, ChatUser, ChatUserRequest,
     HealthResponse, IndexResponse, ChatHistoryResponse,
+    ImageIndexResponse, ImageSearchResponse, ImageSearchResult,
+    ImageSearchB64Request
 )
 from app.rag.engine import rag_engine
 from app.databases.chat_store import get_history, get_or_create_user
+from app.rag.product_image_engine import product_image_engine
+
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from PIL import Image
+from io import BytesIO
+from app.config import get_settings
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+settings = get_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -194,3 +205,112 @@ async def get_chat_history(
         data=result["data"],
         pagination=result["pagination"],
     )
+
+
+
+
+# ---------------------------------------------------------------------------
+# Image RAG Routes
+# ---------------------------------------------------------------------------
+
+@router.post("/image-index/build", response_model=ImageIndexResponse, tags=["Image Search"])
+async def build_image_index(limit: Optional[int] = None) -> ImageIndexResponse:
+    """Rebuild the CLIP image FAISS index from product_images.json."""
+    try:
+        result = product_image_engine.build_index(
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.exception("Image index build failed")
+        raise HTTPException(status_code=500, detail=f"Image index build failed: {exc}") from exc
+ 
+    return ImageIndexResponse(
+        status="rebuilt",
+        total_products=result["indexed"],
+        failed=result["failed"],
+        failed_details=result["failed_details"],
+    )
+
+@router.get("/image-index/status", tags=["Image Search"])
+async def image_index_status():
+    return {
+        "ready": product_image_engine.is_ready,
+        "total_products": product_image_engine.total_products,
+    }
+
+
+
+@router.post("/image-search", response_model=ImageSearchResponse, tags=["Image Search"])
+async def image_search(
+    file: UploadFile = File(...),
+    top_k: int = Form(default=0),
+):
+    """
+    Upload a product photo (file) → returns visually similar products.
+    Used by frontend image-upload feature in the chat widget.
+    """
+    settings = get_settings()
+    effective_top_k = top_k or settings.image_top_k_results
+ 
+    if not product_image_engine.is_ready:
+        raise HTTPException(
+            status_code=400,
+            detail="Image index not built yet. Call POST /image-index/build first.",
+        )
+ 
+    contents = await file.read()
+    try:
+        image = Image.open(BytesIO(contents)).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid image file.") from exc
+ 
+    try:
+        results = product_image_engine.search(
+            pil_image=image,
+            top_k=effective_top_k,
+        )
+    except Exception as exc:
+        logger.exception("Image search failed")
+        raise HTTPException(status_code=500, detail=f"Image search failed: {exc}") from exc
+ 
+    return ImageSearchResponse(
+        top_k=effective_top_k,
+        results=results,
+    )
+
+
+@router.post("/image-search/base64", response_model=ImageSearchResponse, tags=["Image Search"])
+async def image_search_base64(body: ImageSearchB64Request):
+    """
+    Same as /image-search but accepts base64 JSON — used by the agent/tool layer
+    when the frontend sends image_base64 directly in the chat payload.
+    """
+    settings = get_settings()
+    effective_top_k = body.top_k or settings.image_top_k_results
+ 
+    if not product_image_engine.is_ready:
+        raise HTTPException(
+            status_code=400,
+            detail="Image index not built yet. Call POST /image-index/build first.",
+        )
+ 
+    b64 = body.image_base64
+    if "," in b64:
+        b64 = b64.split(",")[1]
+ 
+    try:
+        image_bytes = base64.b64decode(b64)
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid base64 image.") from exc
+ 
+    try:
+        results = product_image_engine.search(
+            pil_image=image,
+            top_k=effective_top_k,
+        )
+    except Exception as exc:
+        logger.exception("Image search failed")
+        raise HTTPException(status_code=500, detail=f"Image search failed: {exc}") from exc
+ 
+    return ImageSearchResponse(top_k=effective_top_k, results=results)

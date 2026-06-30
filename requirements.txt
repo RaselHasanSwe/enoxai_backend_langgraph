@@ -27,3 +27,20 @@ pydantic-settings==2.5.2
 
 # Environment
 python-dotenv==1.0.1
+
+
+
+
+# CLIP------------------------------
+
+# CLIP model loader (Hugging Face)
+transformers==4.40.0
+
+# PyTorch — CPU only (lighter, sufficient for inference)
+# If your server already has torch installed, skip this line
+torch==2.2.2
+torchvision==0.17.2
+
+# Image processing
+Pillow==10.3.0
+numpy==1.26.4

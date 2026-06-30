@@ -371,6 +371,39 @@ class ProductSearchInput(BaseModel):
     )
 
 
+
+
+# ===========================================================================
+# 7. Product Image RAG models  
+# ===========================================================================
+
+class ImageIndexResponse(BaseModel):
+    status: str
+    total_products: int
+    failed: int
+    failed_details: list = []
+
+class ImageSearchResult(BaseModel):
+    rank: int
+    score: float
+    product_id: str
+    product_name: Optional[str] = None
+    product_url: Optional[str] = None
+    product_image: Optional[str] = None
+    department: Optional[str] = None
+    category: Optional[str] = None
+    price: Optional[float] = None
+    color: Optional[list] = None
+
+class ImageSearchResponse(BaseModel):
+    top_k: int
+    results: list[ImageSearchResult]
+
+
+class ImageSearchB64Request(BaseModel):
+    image_base64: str
+    top_k: Optional[int] = None
+
 # Resolve forward references
 CreateReturnInput.model_rebuild()
 SubmitExchangeInput.model_rebuild()

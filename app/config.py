@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     bm25_weight: float = 0.4
     semantic_weight: float = 0.6
 
+    # Proudct Image RAG
+    image_json_path: str = "data/product_images.json"
+    image_base_url: str = "https://enorsia.com/upload/ecom_products/"
+    image_index_path: str = "data/product_image_index.faiss"
+    image_ids_path: str = "data/product_image_index_ids.pkl"
+    image_top_k_results: int = 5
+    image_clip_model: str = "openai/clip-vit-base-patch32"
+
+
     # Chat store
     chat_store_path: str = "data/enoxai.db"
 
