@@ -52,7 +52,7 @@ class ChatRequest(BaseModel):
         description="Filter knowledge base search to a specific FAQ category.",
     )
     image_base64: Optional[str] = Field(default=None)
-    image_media_type: Optional[str] = Field(default="image/jpeg")
+
 
 
 class ChatResponse(BaseModel):
@@ -393,7 +393,21 @@ class ImageSearchResult(BaseModel):
     department: Optional[str] = None
     category: Optional[str] = None
     price: Optional[float] = None
-    color: Optional[list] = None
+    currency: Optional[str] = None
+    discount_price: Optional[float | int] = None
+    discount_percent: Optional[float | int] = None
+    has_discount: Optional[bool] = None
+    in_stock: Optional[bool] = None
+    rating: Optional[float | int] = None
+    total_reviews: Optional[int] = None
+    colors: Optional[list] = None
+    sizes: Optional[list] = None
+    fabric: Optional[str] = None
+    fit: Optional[str] = None
+    sleeve: Optional[str] = None
+    neckline: Optional[str] = None
+    season: Optional[str] = None
+    occasion: Optional[list] = None
 
 class ImageSearchResponse(BaseModel):
     top_k: int

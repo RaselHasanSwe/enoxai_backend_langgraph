@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import logging
 import json
-from typing import AsyncIterator
+import base64
+from PIL import Image
+from io import BytesIO
+from typing import AsyncIterator, Optional
 
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
@@ -30,6 +33,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.runnables import RunnableConfig
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain.globals import set_verbose, set_debug
+from app.rag.product_image_engine import product_image_engine
+from app.models import ImageSearchResult
 
 from app.config import get_settings
 from app.tools.tools import ALL_TOOLS
@@ -65,48 +70,138 @@ _agent = create_react_agent(model=_llm, tools=ALL_TOOLS, state_modifier=_SYSTEM_
 # Public interface
 # ---------------------------------------------------------------------------
 
-async def stream_agent(message: str, session_id: str) -> AsyncIterator[str | dict]:
-    """
-    Stream the agent's output as an async iterator.
+def image_handler(image_base64: str, session_id: str, message: str) -> tuple[list[dict], str]:
 
-    Yields either:
-      - str   — a text token to be forwarded as  data: {"token": "..."}
-      - dict  — a product payload to be forwarded as  data: {"product_data": [...]}
+    image_products: list[dict] | None = None
 
-    The caller (routes.py) is responsible for JSON-encoding each yield.
-    """
+    augmented_message = message
+
+    try:
+        image_products = product_image_engine.agentSearch(
+            pil_image=image_base64,
+            top_k=settings.image_top_k_results or 5,
+        )
+        logger.info(
+            "IMAGE-SEARCH | found %d matches for session=%s",
+            len(image_products), session_id,
+        )
+    except Exception:
+        logger.exception("IMAGE-SEARCH | failed for session=%s", session_id)
+        image_products = []
+    
+    if image_products and len(image_products) > 0:
+
+        product_lines = "\n".join(
+            f"- {p['product_id']}: {p['product_name']} (£{p['price']}, "
+            f"colors: {', '.join(p.get('color') or [])})"
+            for p in image_products
+        )
+        augmented_message = (
+            f"{message}\n\n"
+            f"[SYSTEM CONTEXT: The user uploaded a photo. Visual search found these "
+            f"matching products in our catalog, ranked by similarity:\n{product_lines}\n"
+            f"Respond ONLY with a compact JSON object in this exact shape: "
+            f'{{"message": "<a short, friendly message>", "products": ["<exact product_name 1>", "<exact product_name 2>", ...]}}\n'
+            f"and note if it's an exact match or just similar. Don't call search_products again.]"
+        )
+    else:
+        augmented_message = (
+            f"{message}\n\n"
+            f"[SYSTEM CONTEXT: The user uploaded a photo but no visually similar "
+            f"products were found in our catalog. Let them know and offer to help "
+            f"Respond ONLY with a compact JSON object in this exact shape: "
+            f'{{"message": "<a short, friendly message>", "products": []}}\n'
+            f"search by description instead.]"
+        )
+
+    return image_products, augmented_message
+
+
+
+def product_json_handler(product_data_to_emit: list[dict] | None, image_products: list[dict] | None, agent_response: str) -> list[dict] | None:
+
+    if product_data_to_emit is not None or (image_products and len(image_products) > 0):
+        product_titles = []
+        try:
+            response_json = json.loads(agent_response)
+            if isinstance(response_json, dict) and "products" in response_json:
+                product_titles = response_json["products"]
+        except:
+            pass
+
+        if product_data_to_emit is None:
+            product_data_to_emit = image_products
+        
+        if product_titles:
+            filtered_products   = []
+            used_ids            = set()
+            for title in product_titles:
+                clean_title = title.lower().strip()
+
+                for product in product_data_to_emit: # type: ignore
+                    product_name = product.get("product_name", "").lower().strip()
+
+                    if (product_name == clean_title or product_name in clean_title or clean_title in product_name):
+                        pid = product.get("product_id")
+                        if pid and pid not in used_ids:
+                            filtered_products.append(product)
+                            used_ids.add(pid)
+                            break
+            # Update agent_response with filtered products
+            try:
+                response_json = json.loads(agent_response)
+                if isinstance(response_json, dict):
+                    response_json["product_data"] = filtered_products
+                    agent_response = json.dumps(response_json)
+            except:
+                pass
+
+            return filtered_products 
+        else:
+            return product_data_to_emit
+
+    
+
+
+
+async def stream_agent(message: str, session_id: str, image_base64: Optional[str] = None,) -> AsyncIterator[str | dict]:
     logger.info(
-        "USER MESSAGE:stream_agent()  | session=%s message=%s",
-        session_id, message,
+        "USER MESSAGE:stream_agent()  | session=%s message=%s has_image=%s",
+        session_id, message, bool(image_base64),
     )
+
+    # ── NEW: Image search runs BEFORE the agent ──────────────────────
+    image_products: list[dict] | None   = None
+    augmented_message                   = message
+
+    if image_base64:
+        image_products, augmented_message = image_handler(image_base64, session_id, message)
+
     save_message(session_id, "user", message)
 
-    config: RunnableConfig = {"configurable": {"thread_id": session_id}}
-    tool_calls: list[str] = []
-    agent_response = ""
-    tool_name = None  # track current tool to know when to capture product data
-
-    # Collect search_products results emitted by ToolMessage nodes
-    # so we can forward full product data to the frontend.
+    config: RunnableConfig      = {"configurable": {"thread_id": session_id}}
+    tool_calls: list[str]       = []
+    agent_response              = ""
+    tool_name                   = None
     product_data_to_emit: list[dict] | None = None
 
     try:
         async for msg_chunk, metadata in _agent.astream(
-            {"messages": [HumanMessage(content=message)]},
+            {"messages": [HumanMessage(content=augmented_message)]},
             config=config,
             stream_mode="messages",
         ):
             # ── Tool result interception ──────────────────────────────────
             if isinstance(msg_chunk, ToolMessage):
-                tool_name = msg_chunk.name  # set by LangGraph on ToolMessage
+                tool_name = msg_chunk.name
                 if tool_name == "search_products":
                     try:
-                        payload = json.loads(msg_chunk.content)
+                        payload = json.loads(msg_chunk.content)  # type: ignore
                         if payload.get("status") and payload.get("products"):
                             product_data_to_emit = payload["products"]
                             logger.info(
                                 "PRODUCT-STREAM | captured %d products for session=%s",
-                                len(product_data_to_emit), session_id,
+                                len(product_data_to_emit), session_id, # type: ignore
                             )
                     except (json.JSONDecodeError, AttributeError):
                         logger.warning(
@@ -116,15 +211,10 @@ async def stream_agent(message: str, session_id: str) -> AsyncIterator[str | dic
 
             # ── AI text tokens ────────────────────────────────────────────
             if isinstance(msg_chunk, AIMessageChunk):
-                if (
-                    msg_chunk.content
-                    and not msg_chunk.tool_calls
-                    and not msg_chunk.tool_call_chunks
-                ):
+                if (msg_chunk.content and not msg_chunk.tool_calls and not msg_chunk.tool_call_chunks):
                     content_str = msg_chunk.content
                     if isinstance(content_str, str) and content_str:
-                        # if tool name is not search_products then yield
-                        if tool_name != "search_products":
+                        if tool_name != "search_products" or (image_products and len(image_products) == 0):
                             yield content_str
                         agent_response += content_str
 
@@ -133,45 +223,10 @@ async def stream_agent(message: str, session_id: str) -> AsyncIterator[str | dic
                         tool_calls.append(tc.get("name", "unknown"))
 
         # ── After stream ends, emit product data if we have it ────────────
-        if product_data_to_emit is not None:
-            # Extract product titles from AI response
-            product_titles = []
-            try:
-                response_json = json.loads(agent_response)
-                if isinstance(response_json, dict) and "products" in response_json:
-                    product_titles = response_json["products"]
-            except:
-                pass
-
-            # Filter products if we have titles
-            if product_titles:
-                filtered_products = []
-                used_ids = set()
-                for title in product_titles:
-                    clean_title = title.lower().strip()
-                    for product in product_data_to_emit:
-                        product_name = product.get("product_name", "").lower().strip()
-                        if (product_name == clean_title or
-                                product_name in clean_title or
-                                clean_title in product_name):
-                            pid = product.get("product_id")
-                            if pid and pid not in used_ids:
-                                filtered_products.append(product)
-                                used_ids.add(pid)
-                                break
-
-                # Update agent_response with filtered products
-                try:
-                    response_json = json.loads(agent_response)
-                    if isinstance(response_json, dict):
-                        response_json["product_data"] = filtered_products
-                        agent_response = json.dumps(response_json)
-                except:
-                    pass
-
-                yield {"__product_data__": filtered_products}
-            else:
-                yield {"__product_data__": product_data_to_emit}
+        if product_data_to_emit is not None or (image_products and len(image_products) > 0):
+            logger.info("AGENT PRODUCT RESPONSE: %s", agent_response)
+            product_data = product_json_handler(product_data_to_emit, image_products, agent_response)
+            yield {"__product_data__": product_data}
 
     except Exception:
         logger.exception("AGENT FAILED:stream_agent()  | session=%s", session_id)

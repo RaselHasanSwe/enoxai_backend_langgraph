@@ -11,6 +11,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import json
 import pickle
 import logging
+import base64
 from pathlib import Path
 from io import BytesIO
 from typing import Optional
@@ -23,6 +24,7 @@ from PIL import Image
 from transformers import CLIPProcessor, CLIPModel
 from app.config import get_settings
 from app.models import ImageSearchResult
+from app.tools.tools import _to_json
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -186,7 +188,7 @@ class ProductImageRAGEngine:
     # ────────────────────────────────────────────────
     # Search
     # ────────────────────────────────────────────────
-    def search(
+    def apiSearch(
         self,
         pil_image: Image.Image,
         top_k: int = 5,
@@ -209,20 +211,97 @@ class ProductImageRAGEngine:
                 continue
             product_id = self.index_ids[idx]
             product = self.products_map.get(product_id, {})
+
+            attrs = product.get("attributes", {})
             results.append(ImageSearchResult(
                 rank=len(results) + 1,
                 score=round(float(score), 4),
                 product_id=product_id,
                 product_name=product.get("product_name"),
                 product_url=product.get("product_url"),
-                product_image=image_base_url + product.get("product_image", ""),
+                product_image=product.get("product_image", ""),
                 department=product.get("department"),
                 category=product.get("category"),
                 price=product.get("price"),
-                color=product.get("attributes", {}).get("colors"),
+                currency=product.get("currency", "GBP"),
+                discount_price=product.get("discount_price"),
+                discount_percent=product.get("discount_percent"),
+                has_discount=product.get("has_discount", False),
+                in_stock=product.get("in_stock", True),
+                rating=product.get("rating"),
+                total_reviews=product.get("total_reviews"),
+                colors=attrs.get("colors", []),
+                sizes=attrs.get("sizes", []),
+                fabric=attrs.get("fabric"),
+                fit=attrs.get("fit"),
+                sleeve=attrs.get("sleeve"),
+                neckline=attrs.get("neckline"),
+                season=attrs.get("season"),
+                occasion=attrs.get("occasion", []),
             ))
         return results
 
+
+    def agentSearch(
+        self,
+        pil_image: str,
+        top_k: int = 5,
+    ) -> list[dict]:
+        
+        image_base_url = settings.image_base_url
+        if not image_base_url:
+            logger.warning("No image base url specified in settings")
+            raise ValueError("No image base url specified in settings")
+
+        if self.index is None or len(self.index_ids) == 0:
+            raise RuntimeError("No image index built yet. Call build_index() first.")
+        
+        b64 = pil_image
+        if "," in b64:
+            b64 = b64.split(",")[1]
+        image_bytes = base64.b64decode(b64)
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+
+        query_vector = self._get_clip_embedding(image).reshape(1, -1)
+        scores, indices = self.index.search(query_vector, top_k)  # type: ignore[call-arg]
+
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx == -1:
+                continue
+            product_id = self.index_ids[idx]
+            product = self.products_map.get(product_id, {})
+            
+            attrs = product.get("attributes", {})
+            results.append({
+                "rank":            len(results) + 1,
+                "score":           round(float(score), 4),
+                "product_id":      product["product_id"],
+                "product_name":    product["product_name"],
+                "product_url":     product["product_url"],
+                "product_image":   product["product_image"],
+                "category":        product.get("category"),
+                "department":      product.get("department"),
+                "price":           product.get("price"),
+                "currency":        product.get("currency", "GBP"),
+                "discount_price":  product.get("discount_price"),
+                "discount_percent": product.get("discount_percent"),
+                "has_discount":    product.get("has_discount", False),
+                "in_stock":        product.get("in_stock", True),
+                "rating":          product.get("rating"),
+                "total_reviews":   product.get("total_reviews"),
+                "colors":          attrs.get("colors", []),
+                "sizes":           attrs.get("sizes", []),
+                "fabric":          attrs.get("fabric"),
+                "fit":             attrs.get("fit"),
+                "sleeve":          attrs.get("sleeve"),
+                "season":          attrs.get("season"),
+                "occasion":        attrs.get("occasion", []),
+                "neckline":        attrs.get("neckline"),
+            })
+        
+        return results
+    
     # ────────────────────────────────────────────────
     # Status helpers (mirrors rag_engine.total_docs style)
     # ────────────────────────────────────────────────

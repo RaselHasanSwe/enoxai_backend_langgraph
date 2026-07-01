@@ -78,9 +78,10 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 @router.post("/chat/stream", tags=["Chat"])
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
+    logger.info("Streaming request | request=%s", request)
     async def event_stream():
         try:
-            async for chunk in stream_agent(request.message, request.session_id):
+            async for chunk in stream_agent(request.message, request.session_id, request.image_base64):
                 if isinstance(chunk, str):
                     # Normal text token
                     yield f"data: {json.dumps({'token': chunk})}\n\n"
@@ -243,6 +244,7 @@ async def image_index_status():
 @router.post("/image-search", response_model=ImageSearchResponse, tags=["Image Search"])
 async def image_search(
     file: UploadFile = File(...),
+    request_by: str = Form(default="api"),
     top_k: int = Form(default=0),
 ):
     """
@@ -265,7 +267,7 @@ async def image_search(
         raise HTTPException(status_code=400, detail="Invalid image file.") from exc
  
     try:
-        results = product_image_engine.search(
+        results = product_image_engine.apiSearch(
             pil_image=image,
             top_k=effective_top_k,
         )
@@ -305,7 +307,7 @@ async def image_search_base64(body: ImageSearchB64Request):
         raise HTTPException(status_code=400, detail="Invalid base64 image.") from exc
  
     try:
-        results = product_image_engine.search(
+        results = product_image_engine.apiSearch(
             pil_image=image,
             top_k=effective_top_k,
         )
