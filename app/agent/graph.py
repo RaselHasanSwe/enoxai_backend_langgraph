@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import json
 import base64
+import re
 from PIL import Image
 from io import BytesIO
 from typing import AsyncIterator, Optional
@@ -135,9 +136,30 @@ def build_ai_saved_message(agent_response: str, product_data: list[dict] | None)
 
 
 
+def extract_display_message(agent_response: str) -> str:
+    """Pull the friendly message string from the LLM's product JSON envelope."""
+    if not agent_response.strip():
+        return ""
+
+    text = agent_response.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            msg = payload.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+    except json.JSONDecodeError:
+        pass
+
+    return agent_response.strip()
+
+
 def product_json_handler(product_data_to_emit: list[dict] | None, image_products: list[dict] | None, agent_response: str) -> list[dict] | None:
 
-    if product_data_to_emit is not None or (image_products and len(image_products) > 0):
+    if product_data_to_emit is not None or image_products is not None:
         product_titles = []
         try:
             response_json = json.loads(agent_response)
@@ -209,6 +231,7 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
     tool_name                   = None
     product_data_to_emit: list[dict] | None = None
     final_product_data: list[dict] | None = None
+    is_product_turn = bool(image_base64)
 
     try:
         async for msg_chunk, metadata in _agent.astream(
@@ -224,6 +247,7 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
                         payload = json.loads(msg_chunk.content)  # type: ignore
                         if payload.get("status") and payload.get("products"):
                             product_data_to_emit = payload["products"]
+                            is_product_turn = True
                             logger.info(
                                 "PRODUCT-STREAM | captured %d products for session=%s",
                                 len(product_data_to_emit), session_id, # type: ignore
@@ -239,19 +263,33 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
                 if (msg_chunk.content and not msg_chunk.tool_calls and not msg_chunk.tool_call_chunks):
                     content_str = msg_chunk.content
                     if isinstance(content_str, str) and content_str:
-                        if tool_name != "search_products" or (image_products and len(image_products) == 0):
-                            yield content_str
                         agent_response += content_str
+                        # Hold back raw JSON during product/image turns; send message at end
+                        if not is_product_turn:
+                            yield content_str
 
                 if msg_chunk.tool_calls:
                     for tc in msg_chunk.tool_calls:
                         tool_calls.append(tc.get("name", "unknown"))
 
-        # ── After stream ends, emit product data if we have it ────────────
-        if product_data_to_emit is not None or (image_products and len(image_products) > 0):
+        # ── After stream ends, emit friendly message + product cards ──────
+        if is_product_turn:
             logger.info("AGENT PRODUCT RESPONSE: %s", agent_response)
-            final_product_data = product_json_handler(product_data_to_emit, image_products, agent_response)
-            yield {"__product_data__": final_product_data}
+            final_product_data = product_json_handler(
+                product_data_to_emit, image_products, agent_response
+            ) or []
+            display_message = extract_display_message(agent_response)
+            if not display_message and not final_product_data:
+                display_message = (
+                    "I couldn't find matching products right now, "
+                    "but I'd be happy to help you search another way."
+                )
+            yield {
+                "__product_response__": {
+                    "message": display_message,
+                    "product_data": final_product_data,
+                }
+            }
 
     except Exception:
         logger.exception("AGENT FAILED:stream_agent()  | session=%s", session_id)

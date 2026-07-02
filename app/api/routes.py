@@ -87,9 +87,9 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                     # Normal text token
                     yield f"data: {json.dumps({'token': chunk})}\n\n"
 
-                elif isinstance(chunk, dict) and "__product_data__" in chunk:
-                    # Rich product data — separate SSE event type
-                    yield f"data: {json.dumps({'product_data': chunk['__product_data__']})}\n\n"
+                elif isinstance(chunk, dict) and "__product_response__" in chunk:
+                    resp = chunk["__product_response__"]
+                    yield f"data: {json.dumps({'product_message': resp['message'], 'product_data': resp['product_data']})}\n\n"
 
         except Exception as exc:
             logger.exception("Streaming error | session=%s", request.session_id)
