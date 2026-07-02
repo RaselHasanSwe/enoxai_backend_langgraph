@@ -297,6 +297,7 @@ class ChatHistoryMessage(BaseModel):
     role: str
     message: str
     timestamp: str
+    image_path: Optional[str] = None
 
 
 class ChatHistoryPaginationMeta(BaseModel):

@@ -40,6 +40,7 @@ from app.config import get_settings
 from app.tools.tools import ALL_TOOLS
 from app.agent.prompt import _SYSTEM_PROMPT
 from app.databases.chat_store import save_message
+from app.utils.chat_images import save_chat_image
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -117,6 +118,22 @@ def image_handler(image_base64: str, session_id: str, message: str) -> tuple[lis
     return image_products, augmented_message
 
 
+def build_ai_saved_message(agent_response: str, product_data: list[dict] | None) -> str:
+    """Persist AI response with product_data for history reload; never store augmented prompts."""
+    if not product_data:
+        return agent_response
+
+    try:
+        payload = json.loads(agent_response)
+        if isinstance(payload, dict):
+            payload["product_data"] = product_data
+            return json.dumps(payload)
+    except json.JSONDecodeError:
+        pass
+
+    return json.dumps({"message": agent_response, "product_data": product_data})
+
+
 
 def product_json_handler(product_data_to_emit: list[dict] | None, image_products: list[dict] | None, agent_response: str) -> list[dict] | None:
 
@@ -177,13 +194,21 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
     if image_base64:
         image_products, augmented_message = image_handler(image_base64, session_id, message)
 
-    save_message(session_id, "user", message)
+    user_image_path = None
+    if image_base64:
+        try:
+            user_image_path = save_chat_image(session_id, image_base64)
+        except Exception:
+            logger.exception("CHAT-IMAGE | failed to save upload for session=%s", session_id)
+
+    save_message(session_id, "user", message, image_path=user_image_path)
 
     config: RunnableConfig      = {"configurable": {"thread_id": session_id}}
     tool_calls: list[str]       = []
     agent_response              = ""
     tool_name                   = None
     product_data_to_emit: list[dict] | None = None
+    final_product_data: list[dict] | None = None
 
     try:
         async for msg_chunk, metadata in _agent.astream(
@@ -225,15 +250,16 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
         # ── After stream ends, emit product data if we have it ────────────
         if product_data_to_emit is not None or (image_products and len(image_products) > 0):
             logger.info("AGENT PRODUCT RESPONSE: %s", agent_response)
-            product_data = product_json_handler(product_data_to_emit, image_products, agent_response)
-            yield {"__product_data__": product_data}
+            final_product_data = product_json_handler(product_data_to_emit, image_products, agent_response)
+            yield {"__product_data__": final_product_data}
 
     except Exception:
         logger.exception("AGENT FAILED:stream_agent()  | session=%s", session_id)
         yield "\nSorry, something went wrong."
     finally:
         if agent_response.strip():
-            save_message(session_id, "ai", agent_response)
+            saved_message = build_ai_saved_message(agent_response, final_product_data)
+            save_message(session_id, "ai", saved_message)
 
         logger.info(
             "AGENT RESPONSE:stream_agent()  | session=%s response=%s",

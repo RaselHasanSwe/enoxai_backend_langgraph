@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     # Chat store
     chat_store_path: str = "data/enoxai.db"
+    chat_uploads_path: str = "data/chat_uploads"
 
 
     # LangChain / LangSmith Tracing

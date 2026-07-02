@@ -24,7 +24,7 @@ import logging
 import base64
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 
 from app.agent.graph import run_agent, stream_agent
 from app.models import (
@@ -36,6 +36,7 @@ from app.models import (
 from app.rag.engine import rag_engine
 from app.databases.chat_store import get_history, get_or_create_user
 from app.rag.product_image_engine import product_image_engine
+from app.utils.chat_images import get_chat_image_path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from PIL import Image
@@ -206,6 +207,16 @@ async def get_chat_history(
         data=result["data"],
         pagination=result["pagination"],
     )
+
+
+@router.get("/chat/uploads/{session_id}/{filename}", tags=["Chat"])
+async def get_chat_upload(session_id: str, filename: str):
+    """Serve a previously uploaded chat image by its stored path."""
+    image_path = f"{session_id}/{filename}"
+    filepath = get_chat_image_path(image_path)
+    if not filepath:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    return FileResponse(filepath, media_type="image/jpeg")
 
 
 

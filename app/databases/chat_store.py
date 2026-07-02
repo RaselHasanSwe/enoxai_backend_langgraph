@@ -37,10 +37,19 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 role TEXT NOT NULL,
                 message TEXT NOT NULL,
+                image_path TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
+
+        # Migrate existing tables that pre-date image_path column
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+        }
+        if "image_path" not in columns:
+            conn.execute("ALTER TABLE chat_messages ADD COLUMN image_path TEXT")
 
         conn.commit()
         logger.info("DATABASE | initialized successfully")
@@ -182,7 +191,7 @@ def get_or_create_user(name: str, email: str) -> dict:
 # ---------------------------
 # SAVE MESSAGE
 # ---------------------------
-def save_message(session_id: str, role: str, message: str):
+def save_message(session_id: str, role: str, message: str, image_path: str | None = None):
     conn = None
 
     try:
@@ -216,14 +225,16 @@ def save_message(session_id: str, role: str, message: str):
                 user_id,
                 role,
                 message,
+                image_path,
                 timestamp
             )
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
                 user_id,
                 role,
                 message,
+                image_path,
                 datetime.utcnow()
             )
         )
@@ -231,10 +242,11 @@ def save_message(session_id: str, role: str, message: str):
         conn.commit()
 
         logger.info(
-            "DATABASE | message saved | user_id=%s role=%s length=%s",
+            "DATABASE | message saved | user_id=%s role=%s length=%s has_image=%s",
             user_id,
             role,
-            len(message)
+            len(message),
+            bool(image_path),
         )
 
         return True
@@ -319,7 +331,7 @@ def get_history(user_id: int, page: int = 1):
         # ------------------------
         cursor = conn.execute(
             """
-            SELECT role, message, timestamp
+            SELECT role, message, image_path, timestamp
             FROM chat_messages
             WHERE user_id = ?
             ORDER BY id DESC
@@ -348,6 +360,7 @@ def get_history(user_id: int, page: int = 1):
                 {
                     "role": row["role"],
                     "message": row["message"],
+                    "image_path": row["image_path"],
                     "timestamp": row["timestamp"]
                 }
                 for row in rows
