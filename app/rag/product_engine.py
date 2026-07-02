@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,8 @@ from langchain_openai import OpenAIEmbeddings
 
 from app.config import get_settings
 
+
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -81,7 +84,8 @@ class ProductRAGEngine:
     """
 
     # How many results each sub-retriever fetches before fusion
-    _K = 8
+    _K = settings.top_k_results or 5
+    _MIN_RELEVANCE_SCORE = settings.product_min_relevance_score or 0.8
 
     def __init__(self) -> None:
         self._embeddings = OpenAIEmbeddings(
@@ -158,6 +162,7 @@ class ProductRAGEngine:
         size: Optional[str] = None,
         occasion: Optional[str] = None,
         top_k: int = 5,
+        min_relevance_score: Optional[float] = None,
     ) -> list[dict]:
         """
         Hybrid retrieval with optional post-retrieval attribute filters.
@@ -169,9 +174,25 @@ class ProductRAGEngine:
         """
         if not self.is_ready:
             return []
+        
+        threshold = (
+            min_relevance_score
+            if min_relevance_score is not None
+            else self._MIN_RELEVANCE_SCORE
+        )
+
 
         # Fetch a wider candidate pool so filters still leave meaningful results
         candidates = self._ensemble_retriever.invoke(query)  # type: ignore[union-attr]
+        scored_docs = self._vectorstore.similarity_search_with_relevance_scores(  # type: ignore[union-attr]
+            query, k=self._K * 3
+        )
+
+        score_by_pid = {
+            doc.metadata.get("product_id"): score
+            for doc, score in scored_docs
+            if doc.metadata.get("product_id")
+        }
 
         results: list[dict] = []
         seen: set[str] = set()
@@ -184,6 +205,18 @@ class ProductRAGEngine:
 
             p = self._id_map.get(pid)
             if not p:
+                continue
+
+            # ── Relevance gate ──────────────────────────────────────────
+            score = score_by_pid.get(pid)
+            if score is not None and score < threshold:
+                logger.info(
+                    f"[ProductRAGEngine] Skipping {pid} ({p['product_name']}) "
+                    f"— below relevance threshold {threshold:.2f} (score={score:.2f})"
+                )
+                # Below threshold on the semantic side. Docs that only came
+                # from BM25 (score is None here) are kept — an exact keyword
+                # hit is its own relevance signal, independent of embeddings.
                 continue
 
             # ── Attribute filters ──────────────────────────────────────────

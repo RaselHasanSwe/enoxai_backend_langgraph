@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     top_k_results: int = 4
     bm25_weight: float = 0.4
     semantic_weight: float = 0.6
+    product_min_relevance_score: float = 0.8
 
     # Proudct Image RAG
     image_json_path: str = "data/product_images.json"
@@ -33,6 +34,7 @@ class Settings(BaseSettings):
     image_ids_path: str = "data/product_image_index_ids.pkl"
     image_top_k_results: int = 5
     image_clip_model: str = "openai/clip-vit-base-patch32"
+    image_min_similarity: float = 0.8
 
 
     # Chat store

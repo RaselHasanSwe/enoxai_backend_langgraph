@@ -84,8 +84,8 @@ def image_handler(image_base64: str, session_id: str, message: str) -> tuple[lis
             top_k=settings.image_top_k_results or 5,
         )
         logger.info(
-            "IMAGE-SEARCH | found %d matches for session=%s",
-            len(image_products), session_id,
+            "IMAGE-SEARCH | found %d matches for session=%s request=%s",
+            len(image_products), session_id, image_products
         )
     except Exception:
         logger.exception("IMAGE-SEARCH | failed for session=%s", session_id)

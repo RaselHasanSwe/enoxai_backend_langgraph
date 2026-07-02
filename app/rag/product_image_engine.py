@@ -195,6 +195,8 @@ class ProductImageRAGEngine:
     ) -> list[ImageSearchResult]:
         
         image_base_url = settings.image_base_url
+        min_score = settings.image_min_similarity
+        
         if not image_base_url:
             logger.warning("No image base url specified in settings")
             raise ValueError("No image base url specified in settings")
@@ -208,6 +210,9 @@ class ProductImageRAGEngine:
         results = []
         for score, idx in zip(scores[0], indices[0]):
             if idx == -1:
+                continue
+            score = float(score)
+            if score < min_score:
                 continue
             product_id = self.index_ids[idx]
             product = self.products_map.get(product_id, {})
@@ -241,66 +246,64 @@ class ProductImageRAGEngine:
             ))
         return results
 
-
-    def agentSearch(
-        self,
-        pil_image: str,
-        top_k: int = 5,
-    ) -> list[dict]:
-        
-        image_base_url = settings.image_base_url
-        if not image_base_url:
-            logger.warning("No image base url specified in settings")
-            raise ValueError("No image base url specified in settings")
-
-        if self.index is None or len(self.index_ids) == 0:
-            raise RuntimeError("No image index built yet. Call build_index() first.")
-        
-        b64 = pil_image
-        if "," in b64:
-            b64 = b64.split(",")[1]
-        image_bytes = base64.b64decode(b64)
-        image = Image.open(BytesIO(image_bytes)).convert("RGB")
-
-        query_vector = self._get_clip_embedding(image).reshape(1, -1)
-        scores, indices = self.index.search(query_vector, top_k)  # type: ignore[call-arg]
-
+    def _filter_and_format(self, scores, indices, top_k) -> list[dict]:
+        min_score = settings.image_min_similarity
         results = []
         for score, idx in zip(scores[0], indices[0]):
             if idx == -1:
                 continue
+            score = float(score)
+            if score < min_score:
+                continue
             product_id = self.index_ids[idx]
-            product = self.products_map.get(product_id, {})
-            
+            product = self.products_map.get(product_id)
+            if not product:
+                logger.warning("Indexed product_id %s missing from products_map", product_id)
+                continue
             attrs = product.get("attributes", {})
             results.append({
-                "rank":            len(results) + 1,
-                "score":           round(float(score), 4),
-                "product_id":      product["product_id"],
-                "product_name":    product["product_name"],
-                "product_url":     product["product_url"],
-                "product_image":   product["product_image"],
-                "category":        product.get("category"),
-                "department":      product.get("department"),
-                "price":           product.get("price"),
-                "currency":        product.get("currency", "GBP"),
-                "discount_price":  product.get("discount_price"),
+                "rank": len(results) + 1,
+                "score": round(score, 4),
+                "product_id": product["product_id"],
+                "product_name": product.get("product_name"),
+                "product_url": product.get("product_url"),
+                "product_image": product.get("product_image", ""),
+                "category": product.get("category"),
+                "department": product.get("department"),
+                "price": product.get("price"),
+                "currency": product.get("currency", "GBP"),
+                "discount_price": product.get("discount_price"),
                 "discount_percent": product.get("discount_percent"),
-                "has_discount":    product.get("has_discount", False),
-                "in_stock":        product.get("in_stock", True),
-                "rating":          product.get("rating"),
-                "total_reviews":   product.get("total_reviews"),
-                "colors":          attrs.get("colors", []),
-                "sizes":           attrs.get("sizes", []),
-                "fabric":          attrs.get("fabric"),
-                "fit":             attrs.get("fit"),
-                "sleeve":          attrs.get("sleeve"),
-                "season":          attrs.get("season"),
-                "occasion":        attrs.get("occasion", []),
-                "neckline":        attrs.get("neckline"),
+                "has_discount": product.get("has_discount", False),
+                "in_stock": product.get("in_stock", True),
+                "rating": product.get("rating"),
+                "total_reviews": product.get("total_reviews"),
+                "colors": attrs.get("colors", []),
+                "sizes": attrs.get("sizes", []),
+                "fabric": attrs.get("fabric"),
+                "fit": attrs.get("fit"),
+                "sleeve": attrs.get("sleeve"),
+                "season": attrs.get("season"),
+                "occasion": attrs.get("occasion", []),
+                "neckline": attrs.get("neckline"),
             })
-        
         return results
+
+    def agentSearch(self, pil_image: str, top_k: int = 5) -> list[dict]:
+        image_base_url = settings.image_base_url
+        if not image_base_url:
+            raise ValueError("No image base url specified in settings")
+        if self.index is None or len(self.index_ids) == 0:
+            raise RuntimeError("No image index built yet. Call build_index() first.")
+
+        b64 = pil_image.split(",")[1] if "," in pil_image else pil_image
+        image = Image.open(BytesIO(base64.b64decode(b64))).convert("RGB")
+        query_vector = self._get_clip_embedding(image).reshape(1, -1)
+
+        # search wider than top_k so filtering doesn't starve you of results
+        scores, indices = self.index.search(query_vector, top_k * 3)  # type: ignore[call-arg]
+        results = self._filter_and_format(scores, indices, top_k)
+        return results[:top_k]
     
     # ────────────────────────────────────────────────
     # Status helpers (mirrors rag_engine.total_docs style)
