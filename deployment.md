@@ -244,7 +244,7 @@ https://enoxaibe.enoxsuite.com
 Generate SSL certificate using Certbot:
 
 ```bash
-python schedules.py
+python3 schedules.py
 ```
 ---
 

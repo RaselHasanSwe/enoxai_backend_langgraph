@@ -13,5 +13,5 @@ if __name__ == "__main__":
     #     f"Changed={result['changed']}, "
     #     f"Total={result['total']}"
     # )
-
+    product_image_engine.load_model()
     product_image_engine.build_index()
