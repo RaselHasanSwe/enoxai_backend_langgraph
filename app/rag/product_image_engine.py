@@ -103,10 +103,17 @@ class ProductImageRAGEngine:
         return False
 
     def build_index(
-        self, 
+        self,
         limit: Optional[int] = None,
     ) -> dict:
-        """Fetch product images, embed with CLIP, build + persist FAISS index."""
+        """Fetch product images, embed with CLIP, build + persist FAISS index.
+
+        Each product now has a `product_image` list (multiple images per
+        product). Every image is embedded and added as its own vector in the
+        FAISS index, but `indexed_ids` maps each vector back to the same
+        `product_id` -- so a search can return the same product multiple
+        times (once per matching image) or you can dedupe at query time.
+        """
         image_base_url  = settings.image_base_url
         index_path      = settings.image_index_path
         ids_path        = settings.image_ids_path
@@ -115,25 +122,35 @@ class ProductImageRAGEngine:
         if not index_path or not ids_path or not json_path or not image_base_url:
             logger.warning("No image index or id, json or image paths specified in settings")
             raise ValueError("No image index or id, json or image paths specified in settings")
-    
 
         self.load_product_data(json_path)
         products = list(self.products_map.values())
         if limit:
             products = products[:limit]
 
+        # Flatten to (product_id, image_filename) pairs so progress logging
+        # reflects total images, not total products.
+        image_tasks: list[tuple[str, str]] = []
+        for i, product in enumerate(products):
+            product_id = product.get("product_id", f"unknown_{i}")
+            images = product.get("product_image", [])
+
+            if isinstance(images, str):
+                # Backward-compat: old data had a single filename string.
+                images = [images] if images else []
+
+            if not images:
+                continue
+
+            for image_filename in images:
+                image_tasks.append((product_id, image_filename))
+
         embeddings: list[np.ndarray] = []
         indexed_ids: list[str] = []
         failed: list[dict] = []
 
-        for i, product in enumerate(products):
-            product_id = product.get("product_id", f"unknown_{i}")
-            image_filename = product.get("product_image", "")
-
-            if not image_filename:
-                failed.append({"product_id": product_id, "reason": "no image field"})
-                continue
-
+        total = len(image_tasks)
+        for i, (product_id, image_filename) in enumerate(image_tasks):
             try:
                 url = image_base_url + image_filename
                 response = requests.get(url, timeout=15)
@@ -143,11 +160,17 @@ class ProductImageRAGEngine:
 
                 embeddings.append(emb)
                 indexed_ids.append(product_id)
-                logger.info("[%d/%d] ✅ %s", i + 1, len(products), product_id)
+                logger.info("[%d/%d] ✅ %s (%s)", i + 1, total, product_id, image_filename)
 
             except Exception as e:
-                failed.append({"product_id": product_id, "reason": str(e)})
-                logger.warning("[%d/%d] ❌ %s: %s", i + 1, len(products), product_id, e)
+                failed.append({
+                    "product_id": product_id,
+                    "image": image_filename,
+                    "reason": str(e),
+                })
+                logger.warning(
+                    "[%d/%d] ❌ %s (%s): %s", i + 1, total, product_id, image_filename, e
+                )
 
         if not embeddings:
             raise ValueError("No images could be indexed.")
@@ -167,11 +190,11 @@ class ProductImageRAGEngine:
 
         return {
             "indexed": len(indexed_ids),
+            "indexed_products": len({pid for pid in indexed_ids}),
             "failed": len(failed),
             "failed_details": failed[:10],
             "dimension": dimension,
         }
-
     # ────────────────────────────────────────────────
     # Embedding helper
     # ────────────────────────────────────────────────

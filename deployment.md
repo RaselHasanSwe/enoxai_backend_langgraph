@@ -37,6 +37,10 @@ nano .env
 Paste the following configuration into `.env`:
 
 ```env
+# ── APP ────────────────────────────────────────────────────────────────────
+MAINTENANCE_MODE=false
+
+
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o
@@ -51,15 +55,30 @@ CHAT_STORE_PATH=data/enoxai.db
 TOP_K_RESULTS=4
 BM25_WEIGHT=0.4
 SEMANTIC_WEIGHT=0.6
+PRODUCT_MIN_RELEVANCE_SCORE=0.8
+
+
+# ── Product Image RAG ───────────────────────────────────────────────────────────
+IMAGE_JSON_PATH=data/product_images.json          
+IMAGE_BASE_URL= https://enorsia.com/upload/ecom_products/  
+IMAGE_INDEX_PATH=data/product_image_index.faiss
+IMAGE_IDS_PATH=data/product_image_index_ids.pkl
+IMAGE_TOP_K_RESULTS=5   
+IMAGE_CLIP_MODEL=openai/clip-vit-base-patch32 
+IMAGE_MIN_SIMILARITY=0.8
+CHAT_UPLOAD_PATH=data/chat_uploads
+IMAGE_JSON_URL=https://enorsiastaging.enoxsuite.com/llm_temp/product_images.json
 
 # ── Laravel backend ───────────────────────────────────────────────────────────
-ENOX_API_URL=
+ENOX_API_URL=http://localhost:8000
 ENOX_API_KEY=your-internal-key-here
 
-# ── LangSmith Core Tracing Flags ──────────────────────────────────────────────
+
+
+# --- LangSmith Core Tracing Flags ---
 LANGSMITH_TRACING=false
 LANGSMITH_ENDPOINT=https://api.smith.langchain.com
-LANGSMITH_API_KEY=YOUR_LANGSMITH_API_KEY
+LANGSMITH_API_KEY=
 LANGSMITH_PROJECT="EnoXAI"
 ```
 
@@ -218,44 +237,15 @@ https://enoxaibe.enoxsuite.com
 
 ---
 
-## 9. Pakiza Network Access Configuration
+---
 
-If you are connected to the Pakiza network, configure your local hosts file.
+## 9. Train Image
 
-### Windows
+Generate SSL certificate using Certbot:
 
-Open Notepad as Administrator and edit:
-
-```text
-C:\Windows\System32\drivers\etc\hosts
+```bash
+python schedules.py
 ```
-
-Add:
-
-```text
-172.16.61.171 enoxsuite.com
-172.16.61.171 enorsiastaging.enoxsuite.com
-172.16.61.171 enoxaife.enoxsuite.com
-172.16.61.171 enoxaibe.enoxsuite.com
-```
-
-Flush DNS cache:
-
-```cmd
-ipconfig /flushdns
-```
-
-After that, you can access:
-
-```text
-https://enoxsuite.com
-https://enorsiastaging.enoxsuite.com
-https://enoxaife.enoxsuite.com
-https://enoxaibe.enoxsuite.com
-```
-
-from within the Pakiza network.
-
 ---
 
 ## Troubleshooting

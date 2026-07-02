@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     image_top_k_results: int = 5
     image_clip_model: str = "openai/clip-vit-base-patch32"
     image_min_similarity: float = 0.8
+    image_json_url: str = "https://enorsiastaging.enoxsuite.com/llm_temp/product_images.json"
 
 
     # Chat store
