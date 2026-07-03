@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
     product_image_engine.load_model()
  
     print("[Startup] Loading product image data...")
-    product_image_engine.load_product_data(settings.image_json_path)
+    product_image_engine.load_product_data(settings.product_data_path) 
  
     image_index_loaded = product_image_engine.load_index()
     
