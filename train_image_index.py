@@ -58,7 +58,8 @@ CKPT_DONE_PATH = DATA_DIR / "train_progress_done.json"
 CKPT_FAILED_PATH = DATA_DIR / "train_progress_failed.json"
 
 CHECKPOINT_EVERY = 100
-MAX_WORKERS = 20            # I/O-bound downloads -- fine to exceed 12 vCPUs
+BATCH_SIZE = 100             # max images downloaded-but-not-yet-embedded at once
+MAX_WORKERS = 8              # lowered from 20 -- reduce further if you still see OOM kills
 DOWNLOAD_TIMEOUT = 15
 
 # ────────────────────────────────────────────────
@@ -68,7 +69,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler("train_image_index.log"),
+        logging.FileHandler("train_image_index.log", encoding="utf-8"),
         logging.StreamHandler(),
     ],
 )
@@ -81,7 +82,7 @@ def load_clip():
     processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)  # type: ignore
     model.eval()  # type: ignore[attr-defined]
     torch.set_num_threads(max(1, os.cpu_count() - 4))  # leave headroom for download threads
-    logger.info("CLIP model loaded ✅")
+    logger.info("CLIP model loaded OK")
     return model, processor
 
 
@@ -161,6 +162,9 @@ def download_image(product_id: str, image_filename: str):
         response = requests.get(url, timeout=DOWNLOAD_TIMEOUT)
         response.raise_for_status()
         image = Image.open(BytesIO(response.content)).convert("RGB")
+        # CLIP only ever looks at 224x224 -- shrink now so we never hold a
+        # full-res product photo (often several thousand px) in memory.
+        image.thumbnail((384, 384))
         return product_id, image_filename, image, None
     except Exception as e:
         return product_id, image_filename, None, str(e)
@@ -208,7 +212,7 @@ def build_index() -> dict:
                 failed.append({"product_id": product_id, "image": image_filename, "reason": error})
                 done.add(key)
                 completed_count += 1
-            logger.warning("[%d/%d] ❌ %s (%s): %s", completed_count, total, product_id, image_filename, error)
+            logger.warning("[%d/%d] FAIL %s (%s): %s", completed_count, total, product_id, image_filename, error)
             return
 
         try:
@@ -218,8 +222,11 @@ def build_index() -> dict:
                 failed.append({"product_id": product_id, "image": image_filename, "reason": str(e)})
                 done.add(key)
                 completed_count += 1
-            logger.warning("[%d/%d] ❌ embed failed %s (%s): %s", completed_count, total, product_id, image_filename, e)
+            logger.warning("[%d/%d] FAIL embed failed %s (%s): %s", completed_count, total, product_id, image_filename, e)
             return
+        finally:
+            image.close()
+            del image
 
         with lock:
             embeddings.append(emb)
@@ -227,21 +234,24 @@ def build_index() -> dict:
             done.add(key)
             completed_count += 1
             processed_since_checkpoint += 1
-            logger.info("[%d/%d] ✅ %s (%s)", completed_count, total, product_id, image_filename)
+            logger.info("[%d/%d] OK %s (%s)", completed_count, total, product_id, image_filename)
 
             if processed_since_checkpoint >= CHECKPOINT_EVERY:
                 save_checkpoint(embeddings, indexed_ids, done, failed)
                 processed_since_checkpoint = 0
-                logger.info("💾 Checkpoint saved at %d/%d", completed_count, total)
+                logger.info("Checkpoint saved at %d/%d", completed_count, total)
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [
-            executor.submit(download_image, pid, fname)
-            for (pid, fname) in remaining_tasks
-        ]
-        for future in as_completed(futures):
-            product_id, image_filename, image, error = future.result()
-            handle_result(product_id, image_filename, image, error)
+        # Process in bounded batches -- submitting all ~15k tasks at once lets
+        # downloads race far ahead of the (slower, CPU-bound) embedding step,
+        # piling up finished-but-unprocessed images in memory with no ceiling.
+        # Capping batch size keeps memory bounded regardless of that mismatch.
+        for batch_start in range(0, len(remaining_tasks), BATCH_SIZE):
+            batch = remaining_tasks[batch_start:batch_start + BATCH_SIZE]
+            futures = [executor.submit(download_image, pid, fname) for (pid, fname) in batch]
+            for future in as_completed(futures):
+                product_id, image_filename, image, error = future.result()
+                handle_result(product_id, image_filename, image, error)
 
     save_checkpoint(embeddings, indexed_ids, done, failed)
 
