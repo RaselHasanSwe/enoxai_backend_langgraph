@@ -64,6 +64,7 @@ Always use tools — never guess or fabricate information.
 
 <product_search_response_format>
 IMPORTANT: When you call the search_products tool, respond ONLY with a compact JSON object.
+- If you confuse about product department ask one time to user and remember it for the rest of the conversation.
 
 If products are found, use this exact format:
 
