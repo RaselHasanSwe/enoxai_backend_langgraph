@@ -276,8 +276,8 @@ class ProductImageRAGEngine:
             if idx == -1:
                 continue
             score = float(score)
-            if score < min_score:
-                continue
+            # if score < min_score:
+            #     continue
             product_id = self.index_ids[idx]
             product = self.products_map.get(product_id)
             if not product:
