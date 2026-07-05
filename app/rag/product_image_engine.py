@@ -338,39 +338,31 @@ class ProductImageRAGEngine:
             return candidates[:top_k]
 
         anchor = candidates[0]
-        anchor_category_value = anchor.get("category")
+        anchor_category = anchor.get("category")
+        anchor_department = anchor.get("department")
 
-        if not anchor_category_value:
-            # No category on the top hit at all -- nothing sensible to anchor to,
-            # fall back to plain score ordering.
-            for rank, item in enumerate(candidates[:top_k], start=1):
-                item["rank"] = rank
-                item["category_match"] = True
-            return candidates[:top_k]
-
-        same_category = [c for c in candidates if c.get("category") == anchor_category_value]
-        other_category = [c for c in candidates if c.get("category") != anchor_category_value]
-
-        for c in same_category:
-            c["category_match"] = True
-        for c in other_category:
-            c["category_match"] = False
-
-        merged = same_category + other_category  # both already score-sorted; same-category bucket comes first
         seen = set()
         final = []
 
-        for item in merged:
+        for item in candidates:
+            # Must match both category and department
+            if (
+                item.get("category") != anchor_category
+                or item.get("department") != anchor_department
+            ):
+                continue
+
+            # Keep only one result per product
             if item["product_id"] in seen:
                 continue
+
             seen.add(item["product_id"])
+            item["category_match"] = True
+            item["rank"] = len(final) + 1
             final.append(item)
+
             if len(final) == top_k:
                 break
-
-        for rank, item in enumerate(final, start=1):
-            item["rank"] = rank
-
         return final
 
     def agentSearch(self, pil_image: str, top_k: int = 5) -> list[dict]:
