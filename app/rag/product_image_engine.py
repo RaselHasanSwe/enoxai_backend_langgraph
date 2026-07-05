@@ -269,23 +269,40 @@ class ProductImageRAGEngine:
             ))
         return results
 
-    def _filter_and_format(self, scores, indices, top_k) -> list[dict]:
+    def _filter_and_format(self, scores, indices, top_k, anchor_category: bool = True) -> list[dict]:
+        """
+        Formats raw FAISS hits into product dicts, sorted by score (descending,
+        already guaranteed by FAISS).
+
+        Category filtering strategy
+        ----------------------------
+        The #1 result is treated as the "anchor" -- we assume it's the closest
+        visual match and therefore the correct category. Everything else is
+        preferred to match that category; results from a different category
+        are pushed to the back and only used to backfill if we don't have
+        enough same-category matches to fill top_k.
+
+        This is a soft filter, not a hard drop -- we never return fewer than
+        top_k results just because of category mismatch (as long as the wider
+        candidate pool has enough entries). Each result gets a
+        "category_match" flag so callers/agents can see which ones were
+        backfilled from a different category if it matters downstream.
+        """
         min_score = settings.image_min_similarity
-        results = []
+        candidates = []
         for score, idx in zip(scores[0], indices[0]):
             if idx == -1:
                 continue
             score = float(score)
-            # if score < min_score:
-            #     continue
+            if score < min_score:
+                continue
             product_id = self.index_ids[idx]
             product = self.products_map.get(product_id)
             if not product:
                 logger.warning("Indexed product_id %s missing from products_map", product_id)
                 continue
             attrs = product.get("attributes", {})
-            results.append({
-                "rank": len(results) + 1,
+            candidates.append({
                 "score": round(score, 4),
                 "product_id": product["product_id"],
                 "product_name": product.get("product_name"),
@@ -310,7 +327,51 @@ class ProductImageRAGEngine:
                 "occasion": attrs.get("occasion", []),
                 "neckline": attrs.get("neckline"),
             })
-        return results
+
+        if not candidates:
+            return []
+
+        if not anchor_category:
+            for rank, item in enumerate(candidates[:top_k], start=1):
+                item["rank"] = rank
+                item["category_match"] = True
+            return candidates[:top_k]
+
+        anchor = candidates[0]
+        anchor_category_value = anchor.get("category")
+
+        if not anchor_category_value:
+            # No category on the top hit at all -- nothing sensible to anchor to,
+            # fall back to plain score ordering.
+            for rank, item in enumerate(candidates[:top_k], start=1):
+                item["rank"] = rank
+                item["category_match"] = True
+            return candidates[:top_k]
+
+        same_category = [c for c in candidates if c.get("category") == anchor_category_value]
+        other_category = [c for c in candidates if c.get("category") != anchor_category_value]
+
+        for c in same_category:
+            c["category_match"] = True
+        for c in other_category:
+            c["category_match"] = False
+
+        merged = same_category + other_category  # both already score-sorted; same-category bucket comes first
+        seen = set()
+        final = []
+
+        for item in merged:
+            if item["product_id"] in seen:
+                continue
+            seen.add(item["product_id"])
+            final.append(item)
+            if len(final) == top_k:
+                break
+
+        for rank, item in enumerate(final, start=1):
+            item["rank"] = rank
+
+        return final
 
     def agentSearch(self, pil_image: str, top_k: int = 5) -> list[dict]:
         image_base_url = settings.image_base_url
@@ -323,10 +384,10 @@ class ProductImageRAGEngine:
         image = Image.open(BytesIO(base64.b64decode(b64))).convert("RGB")
         query_vector = self._get_clip_embedding(image).reshape(1, -1)
 
-        # search wider than top_k so filtering doesn't starve you of results
-        scores, indices = self.index.search(query_vector, top_k * 3)  # type: ignore[call-arg]
-        results = self._filter_and_format(scores, indices, top_k)
-        return results[:top_k]
+        # search wider than top_k so category filtering + backfill doesn't starve you of results
+        scores, indices = self.index.search(query_vector, top_k * 5)  # type: ignore[call-arg]
+        results = self._filter_and_format(scores, indices, top_k, anchor_category=True)
+        return results
     
     # ────────────────────────────────────────────────
     # Status helpers (mirrors rag_engine.total_docs style)

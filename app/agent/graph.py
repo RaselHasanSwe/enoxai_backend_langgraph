@@ -100,19 +100,19 @@ def image_handler(image_base64: str, session_id: str, message: str) -> tuple[lis
         )
         augmented_message = (
             f"{message}\n\n"
-            f"[SYSTEM CONTEXT: The user uploaded a photo. Visual search found these "
+            f"[SYSTEM CONTEXT: The user uploaded a image. Visual search found these "
             f"matching products in our catalog, ranked by similarity:\n{product_lines}\n"
             f"Respond ONLY with a compact JSON object in this exact shape: "
-            f'{{"message": "<a short, friendly message>", "products": ["<exact product_name 1>", "<exact product_name 2>", ...]}}\n'
+            f'{{"message": "<A short, friendly message mentioning how many similar products you found based on the image and whether the top result is an exact match or only a similar match>", "products": ["<exact product_name 1>", "<exact product_name 2>", ...]}}\n'
             f"and note if it's an exact match or just similar. Don't call search_products again.]"
         )
     else:
         augmented_message = (
             f"{message}\n\n"
-            f"[SYSTEM CONTEXT: The user uploaded a photo but no visually similar "
+            f"[SYSTEM CONTEXT: The user uploaded a image but no visually similar "
             f"products were found in our catalog. Let them know and offer to help "
             f"Respond ONLY with a compact JSON object in this exact shape: "
-            f'{{"message": "<a short, friendly message>", "products": []}}\n'
+            f'{{"message": "A short, friendly message explaining that no similar products were found and encouraging the user to search another image or by description>", "products": []}}\n'
             f"search by description instead.]"
         )
 
