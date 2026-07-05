@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     image_ids_path: str = "data/product_image_index_ids.pkl"
     image_top_k_results: int = 5
     image_clip_model: str = "patrickjohncyh/fashion-clip"
-    image_min_similarity: float = 0.8
+    image_min_similarity: float = 0.75
     image_json_url: str = "https://enorsiastaging.enoxsuite.com/llm_temp/product_images.json"
 
 
