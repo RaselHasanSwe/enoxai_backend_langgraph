@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     image_clip_model: str = "patrickjohncyh/fashion-clip"
     image_min_similarity: float = 0.75
     image_json_url: str = "https://enorsiastaging.enoxsuite.com/llm_temp/product_images.json"
+    image_local_dir: str = "data/product_images"
 
 
     # Chat store
