@@ -16,16 +16,6 @@ your ProductImageRAGEngine.load_index() already reads. Search code (apiSearch
 
 If killed partway through, just run it again -- it resumes from the
 checkpoint files in your data/ folder instead of starting over.
-
-CHANGE LOG (this version)
---------------------------
-- Images are now read from a local folder (IMAGE_DIR) instead of being
-  downloaded over HTTP. No more `requests` calls, no network timeouts.
-- Embedding is now BATCHED: instead of calling model.get_image_features()
-  once per image, we load a batch of images (fast, local disk, many
-  threads) and run ONE forward pass per batch. This is the main speed win
-  once the network download step is gone -- the CPU-bound embedding call
-  was always the real bottleneck, not the I/O.
 """
 
 import os
@@ -36,11 +26,13 @@ import pickle
 import logging
 import threading
 from pathlib import Path
+from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import faiss
 import torch
+import requests
 from PIL import Image
 from transformers import CLIPProcessor, CLIPModel
 
@@ -51,11 +43,11 @@ settings = get_settings()
 # ────────────────────────────────────────────────
 # Config -- straight from your app.config, nothing hardcoded
 # ────────────────────────────────────────────────
-IMAGE_JSON_PATH = 'data/product_images.json'                # data/product_images.json
-IMAGE_DIR = Path('data/product_images')           # local folder holding all product images now
+IMAGE_JSON_PATH = 'data/test.json'       # data/product_images.json
+IMAGE_BASE_URL = settings.image_base_url          # https://enorsia.com/upload/ecom_products/
 IMAGE_INDEX_PATH = settings.image_index_path      # data/product_image_index.faiss
 IMAGE_IDS_PATH = settings.image_ids_path          # data/product_image_index_ids.pkl
-CLIP_MODEL_NAME = 'patrickjohncyh/fashion-clip'   # swap back to openai/clip-vit-base-patch32 if this underperforms
+CLIP_MODEL_NAME = 'patrickjohncyh/fashion-clip'       # openai/clip-vit-base-patch32
 
 # Checkpoint files live in the same folder as your index (i.e. data/)
 DATA_DIR = Path(IMAGE_INDEX_PATH).parent
@@ -65,9 +57,10 @@ CKPT_IDS_PATH = DATA_DIR / "train_progress_ids.pkl"
 CKPT_DONE_PATH = DATA_DIR / "train_progress_done.json"
 CKPT_FAILED_PATH = DATA_DIR / "train_progress_failed.json"
 
-CHECKPOINT_EVERY = 500        # local reads are fast -- checkpoint less often to cut disk-write overhead
-LOAD_BATCH_SIZE = 64          # how many images we read from disk + embed together in one forward pass
-LOAD_WORKERS = 12             # thread pool for reading/decoding images off local disk (cheap, can be generous)
+CHECKPOINT_EVERY = 100
+BATCH_SIZE = 100             # max images downloaded-but-not-yet-embedded at once
+MAX_WORKERS = 8              # lowered from 20 -- reduce further if you still see OOM kills
+DOWNLOAD_TIMEOUT = 15
 
 # ────────────────────────────────────────────────
 # Logging -- terminal AND file this time
@@ -88,18 +81,17 @@ def load_clip():
     model = CLIPModel.from_pretrained(CLIP_MODEL_NAME)  # type: ignore
     processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)  # type: ignore
     model.eval()  # type: ignore[attr-defined]
-    torch.set_num_threads(max(1, os.cpu_count() - 2))  #type: ignore # no download threads competing for CPU anymore
+    torch.set_num_threads(max(1, os.cpu_count() - 4))  # leave headroom for download threads
     logger.info("CLIP model loaded OK")
     return model, processor
 
 
-def get_clip_embeddings_batch(model, processor, pil_images: list[Image.Image]) -> np.ndarray:
-    """One forward pass for a whole batch of images -- this is the speedup vs. one-at-a-time."""
-    inputs = processor(images=pil_images, return_tensors="pt")  # type: ignore
+def get_clip_embedding(model, processor, pil_image: Image.Image) -> np.ndarray:
+    inputs = processor(images=pil_image, return_tensors="pt")  # type: ignore
     with torch.no_grad():
         emb = model.get_image_features(**inputs)  # type: ignore
     emb = emb / emb.norm(dim=-1, keepdim=True)
-    return emb.numpy().astype("float32")
+    return emb.squeeze().numpy().astype("float32")
 
 
 def load_product_data() -> dict:
@@ -163,15 +155,15 @@ def clear_checkpoint():
             pass
 
 
-def load_image_local(product_id: str, image_filename: str):
-    """Runs in a worker thread. Reads + decodes a single image from local disk. No network."""
+def download_image(product_id: str, image_filename: str):
+    """Runs in a worker thread. I/O only -- no model access here."""
     try:
-        path = IMAGE_DIR / image_filename
-        if not path.exists():
-            return product_id, image_filename, None, f"file not found: {path}"
-        image = Image.open(path).convert("RGB")
+        url = IMAGE_BASE_URL + image_filename
+        response = requests.get(url, timeout=DOWNLOAD_TIMEOUT)
+        response.raise_for_status()
+        image = Image.open(BytesIO(response.content)).convert("RGB")
         # CLIP only ever looks at 224x224 -- shrink now so we never hold a
-        # full-res product photo in memory during the batch.
+        # full-res product photo (often several thousand px) in memory.
         image.thumbnail((384, 384))
         return product_id, image_filename, image, None
     except Exception as e:
@@ -197,7 +189,6 @@ def build_index() -> dict:
 
     total = len(image_tasks)
     logger.info("Total images to process: %d", total)
-    logger.info("Reading images from local folder: %s", IMAGE_DIR.resolve())
 
     embeddings, indexed_ids, done, failed = load_checkpoint()
 
@@ -212,67 +203,55 @@ def build_index() -> dict:
     processed_since_checkpoint = 0
     completed_count = len(done)
 
-    with ThreadPoolExecutor(max_workers=LOAD_WORKERS) as executor:
-        for batch_start in range(0, len(remaining_tasks), LOAD_BATCH_SIZE):
-            batch = remaining_tasks[batch_start:batch_start + LOAD_BATCH_SIZE]
+    def handle_result(product_id, image_filename, image, error):
+        nonlocal processed_since_checkpoint, completed_count
+        key = f"{product_id}::{image_filename}"
 
-            # 1) Load every image in this batch off local disk, in parallel.
-            futures = [executor.submit(load_image_local, pid, fname) for (pid, fname) in batch]
-            loaded = []  # list of (product_id, image_filename, PIL.Image)
+        if error is not None:
+            with lock:
+                failed.append({"product_id": product_id, "image": image_filename, "reason": error})
+                done.add(key)
+                completed_count += 1
+            logger.warning("[%d/%d] FAIL %s (%s): %s", completed_count, total, product_id, image_filename, error)
+            return
+
+        try:
+            emb = get_clip_embedding(model, processor, image)
+        except Exception as e:
+            with lock:
+                failed.append({"product_id": product_id, "image": image_filename, "reason": str(e)})
+                done.add(key)
+                completed_count += 1
+            logger.warning("[%d/%d] FAIL embed failed %s (%s): %s", completed_count, total, product_id, image_filename, e)
+            return
+        finally:
+            image.close()
+            del image
+
+        with lock:
+            embeddings.append(emb)
+            indexed_ids.append(product_id)
+            done.add(key)
+            completed_count += 1
+            processed_since_checkpoint += 1
+            logger.info("[%d/%d] OK %s (%s)", completed_count, total, product_id, image_filename)
+
+            if processed_since_checkpoint >= CHECKPOINT_EVERY:
+                save_checkpoint(embeddings, indexed_ids, done, failed)
+                processed_since_checkpoint = 0
+                logger.info("Checkpoint saved at %d/%d", completed_count, total)
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Process in bounded batches -- submitting all ~15k tasks at once lets
+        # downloads race far ahead of the (slower, CPU-bound) embedding step,
+        # piling up finished-but-unprocessed images in memory with no ceiling.
+        # Capping batch size keeps memory bounded regardless of that mismatch.
+        for batch_start in range(0, len(remaining_tasks), BATCH_SIZE):
+            batch = remaining_tasks[batch_start:batch_start + BATCH_SIZE]
+            futures = [executor.submit(download_image, pid, fname) for (pid, fname) in batch]
             for future in as_completed(futures):
                 product_id, image_filename, image, error = future.result()
-                key = f"{product_id}::{image_filename}"
-                if error is not None:
-                    with lock:
-                        failed.append({"product_id": product_id, "image": image_filename, "reason": error})
-                        done.add(key)
-                        completed_count += 1
-                    logger.warning("[%d/%d] FAIL %s (%s): %s", completed_count, total, product_id, image_filename, error)
-                    continue
-                loaded.append((product_id, image_filename, image))
-
-            if not loaded:
-                continue
-
-            # 2) One batched forward pass for everything that loaded successfully.
-            pil_images = [img for (_, _, img) in loaded]
-            try:
-                batch_embs = get_clip_embeddings_batch(model, processor, pil_images)
-            except Exception as e:
-                # Batch-level failure (e.g. a corrupt image poisoning the batch) --
-                # fall back to embedding one-by-one so we don't lose the whole batch.
-                logger.warning("Batch embed failed (%s), falling back to per-image for this batch", e)
-                batch_embs = []
-                for (product_id, image_filename, image) in loaded:
-                    try:
-                        single = get_clip_embeddings_batch(model, processor, [image])
-                        batch_embs.append(single[0])
-                    except Exception as e2:
-                        key = f"{product_id}::{image_filename}"
-                        with lock:
-                            failed.append({"product_id": product_id, "image": image_filename, "reason": str(e2)})
-                            done.add(key)
-                            completed_count += 1
-                        logger.warning("[%d/%d] FAIL embed failed %s (%s): %s", completed_count, total, product_id, image_filename, e2)
-                        batch_embs.append(None)
-                batch_embs = [e for e in batch_embs if e is not None]
-
-            # 3) Record results, close images, checkpoint periodically.
-            with lock:
-                for (product_id, image_filename, image), emb in zip(loaded, batch_embs):
-                    key = f"{product_id}::{image_filename}"
-                    embeddings.append(emb)
-                    indexed_ids.append(product_id)
-                    done.add(key)
-                    completed_count += 1
-                    processed_since_checkpoint += 1
-                    image.close()
-                    logger.info("[%d/%d] OK %s (%s)", completed_count, total, product_id, image_filename)
-
-                if processed_since_checkpoint >= CHECKPOINT_EVERY:
-                    save_checkpoint(embeddings, indexed_ids, done, failed)
-                    processed_since_checkpoint = 0
-                    logger.info("Checkpoint saved at %d/%d", completed_count, total)
+                handle_result(product_id, image_filename, image, error)
 
     save_checkpoint(embeddings, indexed_ids, done, failed)
 
@@ -280,7 +259,7 @@ def build_index() -> dict:
         raise ValueError("No images could be indexed.")
 
     matrix = np.array(embeddings).astype("float32")
-    dimension = matrix.shape[1]  # 512 for fashion-clip / CLIP ViT-B/32
+    dimension = matrix.shape[1]  # 512 for CLIP ViT-B/32
     index = faiss.IndexFlatIP(dimension)
     index.add(matrix)  # type: ignore[call-arg]
 
