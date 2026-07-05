@@ -43,11 +43,11 @@ settings = get_settings()
 # ────────────────────────────────────────────────
 # Config -- straight from your app.config, nothing hardcoded
 # ────────────────────────────────────────────────
-IMAGE_JSON_PATH = settings.image_json_path        # data/product_images.json
+IMAGE_JSON_PATH = 'data/test.json'       # data/product_images.json
 IMAGE_BASE_URL = settings.image_base_url          # https://enorsia.com/upload/ecom_products/
 IMAGE_INDEX_PATH = settings.image_index_path      # data/product_image_index.faiss
 IMAGE_IDS_PATH = settings.image_ids_path          # data/product_image_index_ids.pkl
-CLIP_MODEL_NAME = settings.image_clip_model       # openai/clip-vit-base-patch32
+CLIP_MODEL_NAME = 'patrickjohncyh/fashion-clip'       # openai/clip-vit-base-patch32
 
 # Checkpoint files live in the same folder as your index (i.e. data/)
 DATA_DIR = Path(IMAGE_INDEX_PATH).parent

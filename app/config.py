@@ -28,12 +28,12 @@ class Settings(BaseSettings):
     product_min_relevance_score: float = 0.8
 
     # Proudct Image RAG
-    image_json_path: str = "data/product_images.json"
+    image_json_path: str = "data/test.json"
     image_base_url: str = "https://enorsia.com/upload/ecom_products/"
     image_index_path: str = "data/product_image_index.faiss"
     image_ids_path: str = "data/product_image_index_ids.pkl"
     image_top_k_results: int = 5
-    image_clip_model: str = "openai/clip-vit-base-patch32"
+    image_clip_model: str = "patrickjohncyh/fashion-clip"
     image_min_similarity: float = 0.8
     image_json_url: str = "https://enorsiastaging.enoxsuite.com/llm_temp/product_images.json"
 
