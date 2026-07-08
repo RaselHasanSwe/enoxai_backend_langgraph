@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import logging
 from pathlib import Path
 from typing import Optional
@@ -164,38 +165,82 @@ class ProductRAGEngine:
         top_k: int = 5,
         min_relevance_score: Optional[float] = None,
     ) -> list[dict]:
-        """
-        Hybrid retrieval with optional post-retrieval attribute filters.
-
-        Strategy:
-          1. Ensemble (FAISS + BM25) retrieves a wider candidate pool (top_k × 3).
-          2. Python-side filters narrow the pool (price, stock, size, color, occasion).
-          3. Return top_k results.
-        """
         if not self.is_ready:
             return []
-        
+
         threshold = (
             min_relevance_score
             if min_relevance_score is not None
             else self._MIN_RELEVANCE_SCORE
         )
 
+        def _norm(s: str) -> str:
+            # normalize for comparison: lowercase, strip, collapse separators
+            return re.sub(r"[\s\-_]+", " ", s.strip().lower())
 
-        # Fetch a wider candidate pool so filters still leave meaningful results
-        candidates = self._ensemble_retriever.invoke(query)  # type: ignore[union-attr]
-        scored_docs = self._vectorstore.similarity_search_with_relevance_scores(  # type: ignore[union-attr]
-            query, k=self._K * 3
-        )
+        results: list[dict] = []
+        seen: set[str] = set()
 
+        # ── PASS 0: Exact/substring category or title match — bypasses semantic threshold ──
+        if category or query:
+            norm_category = _norm(category) if category else None
+            norm_query = _norm(query)
+
+            for pid, p in self._id_map.items():
+                if department and p.get("department", "").lower() != department.lower():
+                    continue
+
+                p_category_norm = _norm(p.get("category", ""))
+                p_name_norm = _norm(p.get("product_name", ""))
+
+                category_hit = norm_category and (
+                    norm_category == p_category_norm
+                    or norm_category in p_category_norm
+                    or p_category_norm in norm_category
+                )
+                title_hit = norm_query in p_name_norm or p_name_norm in norm_query
+
+                if not (category_hit or title_hit):
+                    continue
+
+                if in_stock_only and not p.get("in_stock", True):
+                    continue
+                if category and not category_hit:
+                    continue
+
+                # apply remaining attribute filters
+                effective_price = p.get("discount_price") or p.get("price", 0)
+                if max_price is not None and effective_price > max_price:
+                    continue
+                if min_price is not None and effective_price < min_price:
+                    continue
+                if color:
+                    colors = [c.lower() for c in p.get("attributes", {}).get("colors", [])]
+                    if color.lower() not in colors:
+                        continue
+                if size:
+                    sizes = [str(s).lower() for s in p.get("attributes", {}).get("sizes", [])]
+                    if str(size).lower() not in sizes:
+                        continue
+                if occasion:
+                    occasions = [o.lower() for o in p.get("attributes", {}).get("occasion", [])]
+                    if occasion.lower() not in occasions:
+                        continue
+
+                if pid not in seen:
+                    seen.add(pid)
+                    results.append(p)
+                    if len(results) >= top_k:
+                        return results
+
+        # ── PASS 1: existing semantic + BM25 ensemble (unchanged, fills remaining slots) ──
+        candidates = self._ensemble_retriever.invoke(query)  # type: ignore[union-attr] 
+        scored_docs = self._vectorstore.similarity_search_with_relevance_scores(query, k=self._K * 3)  # type: ignore[union-attr]
         score_by_pid = {
             doc.metadata.get("product_id"): score
             for doc, score in scored_docs
             if doc.metadata.get("product_id")
         }
-
-        results: list[dict] = []
-        seen: set[str] = set()
 
         for doc in candidates:
             pid = doc.metadata.get("product_id")
@@ -207,22 +252,13 @@ class ProductRAGEngine:
             if not p:
                 continue
 
-            # ── Relevance gate ──────────────────────────────────────────
             score = score_by_pid.get(pid)
             if score is not None and score < threshold:
-                logger.info(
-                    f"[ProductRAGEngine] Skipping {pid} ({p['product_name']}) "
-                    f"— below relevance threshold {threshold:.2f} (score={score:.2f})"
-                )
-                # Below threshold on the semantic side. Docs that only came
-                # from BM25 (score is None here) are kept — an exact keyword
-                # hit is its own relevance signal, independent of embeddings.
                 continue
 
-            # ── Attribute filters ──────────────────────────────────────────
             if department and p.get("department", "").lower() != department.lower():
                 continue
-            if category and p.get("category", "").lower() != category.lower():
+            if category and _norm(category) != _norm(p.get("category", "")):
                 continue
             if in_stock_only and not p.get("in_stock", True):
                 continue

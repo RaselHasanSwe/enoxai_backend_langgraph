@@ -89,6 +89,8 @@ class KnowledgeBaseInput(BaseModel):
         description="Optional FAQ category to restrict search, e.g. 'shipping', 'returns'.",
     )
 
+class ProductListInput(BaseModel):
+    department: str = Field(..., description="Filter by department. Accepted values are: Women, Men, Girls, and Boys")
 
 class OrderLookupInput(BaseModel):
     order_id: int = Field(..., description="Unique order identifier, e.g. '6076088850'.")

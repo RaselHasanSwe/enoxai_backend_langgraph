@@ -50,9 +50,14 @@ from app.models import (
     UpdateShippingInput,
     ValidateDiscountInput,
     ProductSearchInput,
+    ProductListInput,
 )
 from app.utils.utils import error_response, post_to_api, sanitize_optional_str, CREATE_SUPPORT_TICKET_DOC
+from app.config import get_settings
+from collections import defaultdict
 
+
+settings = get_settings()
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -291,20 +296,20 @@ def what_does_enorsia_sale() -> dict:
             "Women": {
                 "url": "https://enorsia.com/women",
                 "categories": [
-                    {"name": "Co-ords & Multipacks", "url": "https://enorsia.com/c/women/co-order-multipack"},
-                    {"name": "Coats & Jackets", "url": "https://enorsia.com/c/women/coats-jackets-1"},
+                    {"name": "Co-ords and multipacks", "url": "https://enorsia.com/c/women/co-order-multipack"},
+                    {"name": "Coats and Jackets", "url": "https://enorsia.com/c/women/coats-jackets-1"},
                     {"name": "Dresses", "url": "https://enorsia.com/c/women/dresses"},
-                    {"name": "Hoodies & Sweatshirts", "url": "https://enorsia.com/c/women/hoodies-sweatshirts"},
+                    {"name": "Hoodies and Sweatshirts", "url": "https://enorsia.com/c/women/hoodies-sweatshirts"},
                     {"name": "Jeans", "url": "https://enorsia.com/c/women/jeans-1"},
-                    {"name": "Jumpsuits", "url": "https://enorsia.com/c/women/jumpsuits"},
-                    {"name": "Leggings", "url": "https://enorsia.com/c/women/leggings-joggers"},
+                    {"name": "Jumpsuits and Playsuits", "url": "https://enorsia.com/c/women/jumpsuits"},
+                    {"name": "Leggings and Joggers", "url": "https://enorsia.com/c/women/leggings-joggers"},
                     {"name": "Loungewear", "url": "https://enorsia.com/c/women/loungwear"},
                     {"name": "Nightwear", "url": "https://enorsia.com/c/women/nightwear"},
                     {"name": "Polo Shirts", "url": "https://enorsia.com/c/women/polo-shirts"},
-                    {"name": "Shirts & Blouses", "url": "https://enorsia.com/c/women/blouse-shirts"},
+                    {"name": "Shirts and Blouses", "url": "https://enorsia.com/c/women/blouse-shirts"},
                     {"name": "Shorts", "url": "https://enorsia.com/c/women/shorts"},
                     {"name": "Skirts", "url": "https://enorsia.com/c/women/skirts"},
-                    {"name": "Tops & T-Shirts", "url": "https://enorsia.com/c/women/tops-t-shirts"},
+                    {"name": "Tops and T-Shirts", "url": "https://enorsia.com/c/women/tops-t-shirts"},
                     {"name": "Trousers", "url": "https://enorsia.com/c/women/trousers"}
                 ]
             },
@@ -312,8 +317,8 @@ def what_does_enorsia_sale() -> dict:
                 "url": "https://enorsia.com/men",
                 "categories": [
                     {"name": "Chinos", "url": "https://enorsia.com/c/men/chinos-trousers"},
-                    {"name": "Co-ords & Multipacks", "url": "https://enorsia.com/c/men/co-order-multipack"},
-                    {"name": "Coats & Jackets", "url": "https://enorsia.com/c/men/coats-jackets"},
+                    {"name": "Co-ords and Multipacks", "url": "https://enorsia.com/c/men/co-order-multipack"},
+                    {"name": "Coats and Jackets", "url": "https://enorsia.com/c/men/coats-jackets"},
                     {"name": "Jeans", "url": "https://enorsia.com/c/men/jeans"},
                     {"name": "Joggers", "url": "https://enorsia.com/c/men/joggers"},
                     {"name": "Loungewear", "url": "https://enorsia.com/c/men/loungewear"},
@@ -321,37 +326,37 @@ def what_does_enorsia_sale() -> dict:
                     {"name": "Polo Shirts", "url": "https://enorsia.com/c/men/polo-shirts-1"},
                     {"name": "Shirts", "url": "https://enorsia.com/c/men/shirts"},
                     {"name": "Shorts", "url": "https://enorsia.com/c/men/shorts-1"},
-                    {"name": "Sweatshirts & Hoodies", "url": "https://enorsia.com/c/men/sweatshirts-hoodies"},
-                    {"name": "T-Shirts & Vests", "url": "https://enorsia.com/c/men/t-shirts-vest"},
+                    {"name": "Sweatshirts and Hoodies", "url": "https://enorsia.com/c/men/sweatshirts-hoodies"},
+                    {"name": "T-Shirts and Vests", "url": "https://enorsia.com/c/men/t-shirts-vest"},
                     {"name": "Trousers", "url": "https://enorsia.com/c/men/trousers-3"}
                 ]
             },
             "Girls": {
                 "url": "https://enorsia.com/girls",
                 "categories": [
-                    {"name": "Co-ords & Multipacks", "url": "https://enorsia.com/c/girls/co-ords-multipacks-1"},
-                    {"name": "Dresses & Jumpsuits", "url": "https://enorsia.com/c/girls/dresses-jumpsuits-1"},
-                    {"name": "Jeans & Dungarees", "url": "https://enorsia.com/c/girls/jeans-dungarees"},
-                    {"name": "Leggings & Joggers", "url": "https://enorsia.com/c/girls/legging-joggers"},
+                    {"name": "Co-ords and Multipacks", "url": "https://enorsia.com/c/girls/co-ords-multipacks-1"},
+                    {"name": "Dresses and Jumpsuits", "url": "https://enorsia.com/c/girls/dresses-jumpsuits-1"},
+                    {"name": "Jeans and Dungarees", "url": "https://enorsia.com/c/girls/jeans-dungarees"},
+                    {"name": "Leggings and Joggers", "url": "https://enorsia.com/c/girls/legging-joggers"},
                     {"name": "Nightwear", "url": "https://enorsia.com/c/girls/nightwear-2"},
                     {"name": "Shorts", "url": "https://enorsia.com/c/girls/shorts-2"},
                     {"name": "Sweatshirts & Hoodies", "url": "https://enorsia.com/c/girls/sweatshirts-hoodies-1"},
-                    {"name": "Tops & T-Shirts", "url": "https://enorsia.com/c/girls/tops-t-shirts-1"},
+                    {"name": "Tops and T-Shirts", "url": "https://enorsia.com/c/girls/tops-t-shirts-1"},
                     {"name": "Trousers", "url": "https://enorsia.com/c/girls/trousers-1"}
                 ]
             },
             "Boys": {
                 "url": "https://enorsia.com/boys",
                 "categories": [
-                    {"name": "Co-ords & Multipacks", "url": "https://enorsia.com/c/boy/co-ords-multipacks-2"},
-                    {"name": "Coats & Jackets", "url": "https://enorsia.com/c/boy/coats-jackets-3"},
+                    {"name": "Co-ords and Multipacks", "url": "https://enorsia.com/c/boy/co-ords-multipacks-2"},
+                    {"name": "Coats and Jackets", "url": "https://enorsia.com/c/boy/coats-jackets-3"},
                     {"name": "Jeans", "url": "https://enorsia.com/c/boy/jeans-3"},
                     {"name": "Joggers", "url": "https://enorsia.com/c/boy/joggers-1"},
                     {"name": "Nightwear", "url": "https://enorsia.com/c/boy/nightwear-3"},
                     {"name": "Shirts", "url": "https://enorsia.com/c/boy/shirts-1"},
                     {"name": "Shorts", "url": "https://enorsia.com/c/boy/shorts-3"},
-                    {"name": "Sweatshirts & Hoodies", "url": "https://enorsia.com/c/boy/sweatshirts-hoodies-2"},
-                    {"name": "T-Shirts & Vests", "url": "https://enorsia.com/c/boy/t-shirts-vest-1"},
+                    {"name": "Sweatshirts and Hoodies", "url": "https://enorsia.com/c/boy/sweatshirts-hoodies-2"},
+                    {"name": "T-Shirts and Vests", "url": "https://enorsia.com/c/boy/t-shirts-vest-1"},
                     {"name": "Trousers", "url": "https://enorsia.com/c/boy/trousers-2"}
                 ]
             },
@@ -426,6 +431,46 @@ def what_does_enorsia_sale() -> dict:
             ],
         }
     }
+
+
+@tool("product_title_list", args_schema=ProductListInput)
+def product_title_list(department: str) -> str:
+    """
+    Return the titles of all products in the specified department.
+
+    Args:
+        department: Filter products by department. Accepted values are:
+            - Women
+            - Men
+            - Girls
+            - Boys
+
+    Returns:
+        A newline-separated list of all product titles in the selected department.
+    """
+
+    json_path = settings.product_data_path
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        products = json.load(f)
+
+    # Group product titles by department
+    grouped = defaultdict(list)
+
+    for product in products:
+        dept = product.get("department", "").strip().lower()
+        title = product.get("product_name", "").strip()
+
+        if title:
+            grouped[dept].append(title)
+
+    dept = department.strip().lower()
+
+    if dept not in grouped:
+        return f"No products found for department '{department}'."
+
+    return "\n".join(grouped[dept])
+    
 
 # ===========================================================================
 # ORDER DOMAIN
@@ -723,4 +768,5 @@ ALL_TOOLS = [
     create_support_ticket,   # Tool 14
     what_does_enorsia_sale,   # Tool 15
     search_products,            # Tool 16 — RAG (product catalogue)
+    product_title_list,         # Tool 17
 ]
