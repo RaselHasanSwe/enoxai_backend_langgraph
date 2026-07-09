@@ -92,6 +92,10 @@ class KnowledgeBaseInput(BaseModel):
 class ProductListInput(BaseModel):
     department: str = Field(..., description="Filter by department. Accepted values are: Women, Men, Girls, and Boys")
 
+class CategoryListInput(BaseModel):
+    department: str = Field(..., description="Filter by department. Accepted values are: Women, Men, Girls, and Boys")
+
+
 class OrderLookupInput(BaseModel):
     order_id: int = Field(..., description="Unique order identifier, e.g. '6076088850'.")
     @field_validator("order_id")
@@ -332,11 +336,9 @@ class ProductSearchInput(BaseModel):
     department: Optional[str] = Field(
         description="Filter by department. Accepted values are: women, men, girls, and boys."
     )
-    category: Optional[str] = Field(
-        default=None,
+    category: str = Field(
         description=(
-            "Filter by category, e.g. 'Jumpsuits and Playsuits', 'Tops', 'Dresses'. "
-            "Leave None if not clear from the query."
+            "Find best matches category from 'find_product_category' tool. after understanding intent. and provide category name."
         )
     )
     color: Optional[str] = Field(

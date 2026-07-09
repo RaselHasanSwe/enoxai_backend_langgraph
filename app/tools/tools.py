@@ -51,6 +51,7 @@ from app.models import (
     ValidateDiscountInput,
     ProductSearchInput,
     ProductListInput,
+    CategoryListInput,
 )
 from app.utils.utils import error_response, post_to_api, sanitize_optional_str, CREATE_SUPPORT_TICKET_DOC
 from app.config import get_settings
@@ -142,7 +143,7 @@ def search_knowledge_base(
 def search_products(
     query: str,
     department: str,
-    category: Optional[str] = None,
+    category: str,
     color: Optional[str] = None,
     size: Optional[str] = None,
     occasion: Optional[str] = None,
@@ -470,7 +471,52 @@ def product_title_list(department: str) -> str:
         return f"No products found for department '{department}'."
 
     return "\n".join(grouped[dept])
-    
+
+
+
+
+@tool("find_product_category", args_schema=CategoryListInput)
+def find_product_category(department: str) -> str:
+    """
+   Return all available product categories for the specified department.
+
+    Accepted department values:
+    - Women
+    - Men
+    - Girls
+    - Boys
+
+    Use this tool when the user's requested product category needs to be
+    identified from natural language.
+
+    After selecting the best matching category, call the `search_product`
+    tool using the chosen category.
+    """
+
+    json_path = settings.product_data_path
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        products = json.load(f)
+
+    categories = sorted({
+        item["category"]
+        for item in products
+        if item.get("department", "").lower() == department.lower()
+    })
+
+    if not categories:
+        return f"No categories found for department '{department}'."
+
+    category_list = "\n".join(f"- {category}" for category in categories)
+
+    return f"""Available categories for {department}:
+    {category_list}
+    Instructions:
+    1. Choose the single best matching category based on the user's request.
+    2. Then call the `search_product` tool using the selected category.
+    3. If no category is an exact match, choose the closest semantic category.
+    4. Do not ask the user to choose unless multiple categories are equally appropriate.
+    """
 
 # ===========================================================================
 # ORDER DOMAIN
@@ -769,4 +815,5 @@ ALL_TOOLS = [
     what_does_enorsia_sale,   # Tool 15
     search_products,            # Tool 16 — RAG (product catalogue)
     product_title_list,         # Tool 17
+    find_product_category,       # Tool 18
 ]
