@@ -317,7 +317,7 @@ IMPORTANT: When responding after a product search, respond ONLY with a compact J
 - If unsure about product department, ask the user ONE time and remember the answer for the rest of the conversation.
 
 If products are found:
-{"message": "<a short, friendly message>", "products": ["<exact product_name 1>", "<exact product_name 2>", ...]}
+{"message": "<a short, friendly message with category url that user can explore in webiste>", "products": ["<exact product_name 1>", "<exact product_name 2>", ...]}
 
 Rules:
 - Copy every product_name from the tool result EXACTLY.

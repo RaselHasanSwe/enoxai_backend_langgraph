@@ -103,7 +103,7 @@ def image_handler(image_base64: str, session_id: str, message: str) -> tuple[lis
             f"[SYSTEM CONTEXT: The user uploaded a image. Visual search found these "
             f"matching products in our catalog, ranked by similarity:\n{product_lines}\n"
             f"Respond ONLY with a compact JSON object in this exact shape: "
-            f'{{"message": "<A short, friendly message mentioning how many similar products you found based on the image and whether the top result is an exact match or only a similar match>", "products": ["<exact product_name 1>", "<exact product_name 2>", ...]}}\n'
+            f'{{"message": "<A short, friendly message mentioning how many similar products you found based on the image and whether the top result is an exact match or only a similar match. always try to provide category url with text>", "products": ["<exact product_name 1>", "<exact product_name 2>", ...]}}\n'
             f"and note if it's an exact match or just similar. Don't call search_products again.]"
         )
     else:
