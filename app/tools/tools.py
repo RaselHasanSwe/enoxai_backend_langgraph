@@ -546,8 +546,13 @@ def get_order_status(
 @tool("cancel_order", args_schema=CancelOrderInput)
 def cancel_order(order_id: int, email: EmailStr, cancel_reason: str) -> str:
     """
-    Cancel an order. Both order_id, email and cancel_reason are required for verification.
-    Returns a JSON string confirming success or explaining the failure.
+    Important:
+    - Call this tool only once for a given cancellation request.
+    - If the cancellation succeeds, do NOT call it again with the same information.
+    - If the customer repeats the same cancellation request after a successful cancellation, inform them that the order has already been cancelled instead of attempting another cancellation.
+    - Do not retry or submit duplicate cancellation requests with identical details, as this may result in unnecessary API calls or inconsistent behavior.
+    - Only submit another cancellation request if the customer provides different information or wants to cancel a different order.
+
     """
     payload = {"order_id": order_id, "email": email.strip(), "cancel_reason": cancel_reason.strip()}
     logger.info("ORDER-CANCEL | cancel_order() called with payload=%s", payload)
@@ -777,6 +782,16 @@ def create_support_ticket(
     message: str,
     order_id: Optional[str] = None,
 ) -> str:
+    """
+    Important:
+    - Call this tool only once for a given support request.
+    - If the API call succeeds, do NOT call it again with the same information.
+    - If the customer repeats the same request after a successful submission, inform them that their support ticket has already been created instead of creating a duplicate.
+    - Do not retry or submit duplicate requests with identical details, as this may create multiple support tickets.
+    - Only create a new ticket if the customer provides new or changed information, or explicitly wants to submit a different issue.
+
+    Returns the result of the support ticket creation request.
+    """
     payload: dict = {
         "name": name.strip(),
         "email": email.strip(),
