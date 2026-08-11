@@ -39,7 +39,7 @@ from app.models import ImageSearchResult
 from app.config import get_settings
 from app.tools.tools import ALL_TOOLS
 from app.agent.prompt import _SYSTEM_PROMPT
-from app.agent.memory import agent_memory
+from app.agent import memory as agent_memory_module
 from app.databases.chat_store import save_message, get_recent_messages, AGENT_HISTORY_LIMIT
 from app.utils.chat_images import save_chat_image
 
@@ -63,7 +63,29 @@ _llm = ChatOpenAI(
     model_kwargs={"stream_options": {"include_usage": True}}
 )
 
-_agent = create_react_agent(model=_llm, tools=ALL_TOOLS, state_modifier=_SYSTEM_PROMPT, checkpointer=agent_memory)
+_agent = None
+
+
+def init_agent() -> None:
+    """Build the LangGraph agent after async checkpoint storage is ready."""
+    global _agent
+
+    checkpointer = agent_memory_module.agent_memory
+    if checkpointer is None:
+        raise RuntimeError("Agent memory not initialized. Call init_agent_memory() first.")
+
+    _agent = create_react_agent(
+        model=_llm,
+        tools=ALL_TOOLS,
+        state_modifier=_SYSTEM_PROMPT,
+        checkpointer=checkpointer,
+    )
+
+
+def get_agent():
+    if _agent is None:
+        raise RuntimeError("Agent not initialized. Call init_agent() first.")
+    return _agent
 
 
 # ---------------------------------------------------------------------------
@@ -169,14 +191,15 @@ def build_history_messages(session_id: str) -> list:
     return messages
 
 
-def build_agent_input(session_id: str, user_message: str, config: RunnableConfig) -> list:
+async def build_agent_input(session_id: str, user_message: str, config: RunnableConfig) -> list:
     """
     Return messages for the next agent turn.
 
     Uses the LangGraph checkpoint when available; otherwise hydrates from SQLite
     so conversations survive server restarts.
     """
-    state = _agent.get_state(config)
+    agent = get_agent()
+    state = await agent.aget_state(config)
     checkpoint_messages = []
     if state and state.values:
         checkpoint_messages = state.values.get("messages") or []
@@ -261,7 +284,7 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
     save_message(session_id, "user", message, image_path=user_image_path)
 
     config: RunnableConfig      = {"configurable": {"thread_id": session_id}}
-    input_messages = build_agent_input(session_id, augmented_message, config)
+    input_messages = await build_agent_input(session_id, augmented_message, config)
     tool_calls: list[str]       = []
     agent_response              = ""
     tool_name                   = None
@@ -270,7 +293,7 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
     is_product_turn = bool(image_base64)
 
     try:
-        async for msg_chunk, metadata in _agent.astream(
+        async for msg_chunk, metadata in get_agent().astream(
             {"messages": input_messages},
             config=config,
             stream_mode="messages",
@@ -361,13 +384,13 @@ async def run_agent(message: str, session_id: str) -> dict:
     )
     save_message(session_id, "user", message)
     config: RunnableConfig = {"configurable": {"thread_id": session_id}}
-    input_messages = build_agent_input(session_id, message, config)
+    input_messages = await build_agent_input(session_id, message, config)
 
     answer = ""
     tool_calls: list[str] = []
 
     try:
-        result = await _agent.ainvoke(
+        result = await get_agent().ainvoke(
             {"messages": input_messages},
             config=config,
         )

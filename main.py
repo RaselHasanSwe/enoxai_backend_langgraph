@@ -23,6 +23,8 @@ from app.config import get_settings, reload_settings, resolve_enox_api_key, reso
 from app.rag.engine import rag_engine
 from app.utils.utils import configure_logging
 from app.databases.chat_store import init_db
+from app.agent.memory import init_agent_memory, close_agent_memory
+from app.agent.graph import init_agent
 from app.rag.product_engine import product_rag_engine
 from app.rag.product_image_engine import product_image_engine
 from fastapi import Request
@@ -88,10 +90,16 @@ async def lifespan(app: FastAPI):
     print("[Startup] Initializing chat message database...")
 
     init_db()
+
+    print("[Startup] Initializing agent checkpoint storage...")
+    await init_agent_memory()
+    init_agent()
+    print("[Startup] Agent checkpoint storage ready.")
     
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────────────────
+    await close_agent_memory()
     print("[Shutdown] Goodbye.")
 
 
