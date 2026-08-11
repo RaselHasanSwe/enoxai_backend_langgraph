@@ -47,7 +47,7 @@ def save_chat_image(session_id: str, image_base64: str) -> str:
 
     filename = f"{uuid4().hex}.jpg"
     filepath = upload_dir / filename
-    image.save(filepath, "JPEG", quality=85)
+    image.save(filepath, "JPEG", quality=92, optimize=True)
 
     relative_path = f"{session_id}/{filename}"
     logger.info("CHAT-IMAGE | saved | path=%s", relative_path)
