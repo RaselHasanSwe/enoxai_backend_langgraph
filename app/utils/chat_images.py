@@ -1,7 +1,3 @@
-"""
-Save user-uploaded chat images to disk (not in the database as base64).
-"""
-
 from __future__ import annotations
 
 import base64
@@ -14,10 +10,21 @@ from uuid import uuid4
 from PIL import Image
 
 from app.config import get_settings
+from app.utils.validators import validate_session_id
 
 logger = logging.getLogger(__name__)
 
 _FILENAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+
+
+def _open_image(image_bytes: bytes) -> Image.Image:
+    settings = get_settings()
+    if len(image_bytes) > settings.max_image_upload_bytes:
+        raise ValueError("Image file is too large")
+
+    Image.MAX_IMAGE_PIXELS = 20_000_000
+    image = Image.open(BytesIO(image_bytes)).convert("RGB")
+    return image
 
 
 def save_chat_image(session_id: str, image_base64: str) -> str:
@@ -26,13 +33,14 @@ def save_chat_image(session_id: str, image_base64: str) -> str:
     suitable for storing in chat_messages.image_path (session_id/filename).
     """
     settings = get_settings()
+    validate_session_id(session_id)
 
     b64 = image_base64
     if "," in b64:
         b64 = b64.split(",", 1)[1]
 
-    image_bytes = base64.b64decode(b64)
-    image = Image.open(BytesIO(image_bytes)).convert("RGB")
+    image_bytes = base64.b64decode(b64, validate=True)
+    image = _open_image(image_bytes)
 
     upload_dir = Path(settings.chat_uploads_path) / session_id
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -57,6 +65,11 @@ def get_chat_image_path(image_path: str) -> Path | None:
 
     session_id, filename = parts
     if not _FILENAME_RE.match(session_id) or not _FILENAME_RE.match(filename):
+        return None
+
+    try:
+        validate_session_id(session_id)
+    except ValueError:
         return None
 
     settings = get_settings()

@@ -2,15 +2,16 @@
 main.py
 
 FastAPI application entry point.
-
-Startup:
-  1. Configure logging
-  2. Load FAQ data from disk
-  3. Load saved FAISS index — or build fresh if none exists
-
-Run:
-  uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
+
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load backend/.env before any app imports that read settings.
+_ENV_FILE = Path(__file__).resolve().parent / ".env"
+if _ENV_FILE.is_file():
+    load_dotenv(_ENV_FILE, override=True)
 
 from contextlib import asynccontextmanager
 
@@ -18,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
-from app.config import get_settings
+from app.config import get_settings, reload_settings, resolve_enox_api_key, resolve_enox_api_url
 from app.rag.engine import rag_engine
 from app.utils.utils import configure_logging
 from app.databases.chat_store import init_db
@@ -26,14 +27,24 @@ from app.rag.product_engine import product_rag_engine
 from app.rag.product_image_engine import product_image_engine
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from app.middleware.rate_limit import RateLimitMiddleware
 
-settings = get_settings()
+settings = reload_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────────────
+    reload_settings()
     configure_logging()
+
+    api_key = resolve_enox_api_key()
+    api_url = resolve_enox_api_url()
+    if not api_key:
+        print("[Startup] WARNING: ENOX_API_KEY missing in backend/.env")
+    else:
+        print(f"[Startup] Laravel API key loaded from .env (prefix={api_key[:6]}...)")
+    print(f"[Startup] Laravel API URL: {api_url}")
 
     print("[Startup] Loading FAQ data...")
     rag_engine.load_faq_data(settings.faq_data_path)
@@ -106,26 +117,38 @@ Two-path architecture:
     """,
     version="2.0.0",
     lifespan=lifespan,
+    docs_url="/docs" if settings.debug_mode else None,
+    redoc_url="/redoc" if settings.debug_mode else None,
+    openapi_url="/openapi.json" if settings.debug_mode else None,
 )
 
 # ---------------------------------------------------------------------------
-# CORS — adjust origins for your frontend domain in production
+# CORS — configure allowed origins via CORS_ORIGINS env (comma-separated)
 # ---------------------------------------------------------------------------
+
+_cors_origins = [
+    origin.strip()
+    for origin in settings.cors_origins.split(",")
+    if origin.strip()
+] or ["*"]
+_allow_credentials = "*" not in _cors_origins
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],        # tighten this in production
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+app.add_middleware(RateLimitMiddleware)
 
 
 @app.middleware("http")
 async def maintenance_mode(request: Request, call_next):
     # Allow health check and docs if needed
     allowed_paths = [
-        
+        "/api/v1/health",
     ]
 
     if settings.maintenance_mode and request.url.path not in allowed_paths:

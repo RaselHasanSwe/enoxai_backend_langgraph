@@ -129,7 +129,13 @@ def post_to_api(
         Parsed response dict, or a standardised error dict on failure.
     """
     url = f"{base_url.rstrip('/')}{endpoint}"
-    logger.info("POST %s | payload_keys=%s", url, list(payload.keys()))
+    api_key = headers.get("X-INTERNAL-KEY", "")
+    logger.info(
+        "POST %s | payload_keys=%s | key_prefix=%s",
+        url,
+        list(payload.keys()),
+        api_key[:6] if api_key else "MISSING",
+    )
 
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=_REQUEST_TIMEOUT_SECONDS)
@@ -165,7 +171,7 @@ def post_to_api(
     # Guarantee the 'data' key is always present so callers never KeyError
     data.setdefault("data", [])
 
-    logger.info("Response OK | status=%s url=%s data=%s", data.get("status"), url, data)
+    logger.info("Response OK | status=%s url=%s", data.get("status"), url)
     #logger.debug("Response body | %s", data)
 
     return data

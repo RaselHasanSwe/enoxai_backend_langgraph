@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # Agent Configuration
 # ---------------------------------------------------------------------------
 
-set_verbose(True)
+set_verbose(settings.debug_mode)
 #set_debug(True)
 
 agent_memory = MemorySaver()
@@ -95,7 +95,7 @@ def image_handler(image_base64: str, session_id: str, message: str) -> tuple[lis
 
         product_lines = "\n".join(
             f"- {p['product_id']}: {p['product_name']} (£{p['price']}, "
-            f"colors: {', '.join(p.get('color') or [])})"
+            f"colors: {', '.join(p.get('colors') or p.get('color') or [])})"
             for p in image_products
         )
         augmented_message = (

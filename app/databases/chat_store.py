@@ -5,9 +5,9 @@ import math
 from uuid import uuid4
 import random
 
+from app.utils.validators import sanitize_display_name
+
 logger = logging.getLogger(__name__)
-
-
 # ---------------------------
 # CREATE TABLE (run once at startup)
 # ---------------------------
@@ -16,8 +16,9 @@ def init_db():
     try:
         conn = get_connection()
 
-        # Enable foreign keys in SQLite
+        # Enable foreign keys and WAL mode for better concurrency
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
 
         # Users table
         conn.execute("""
@@ -67,12 +68,13 @@ def init_db():
 
 
 def get_welcome_message(user_name: str) -> str:
+    safe_name = sanitize_display_name(user_name)
     messages = [
-        f"Hi **{user_name}**! I'm **EnoX**, your assistant from **PFD Enorsia UK LTD**. How may I help you today?",
-        f"Welcome back, **{user_name}**! I'm **EnoX** from **PFD Enorsia UK LTD**. Got a question about your order or anything else? I'm here!",
-        f"Hey **{user_name}**! Great to have you here. I'm **EnoX**, PFD Enorsia's virtual assistant. What can I do for you today?",
-        f"Hello **{user_name}**! I'm **EnoX** from **PFD Enorsia UK LTD**. Whether it's orders, returns, or products — I've got you covered. What do you need?",
-        f"Hi there, **{user_name}**! I'm **EnoX**, your dedicated assistant at **PFD Enorsia UK LTD**. How can I assist you today?",
+        f"Hi **{safe_name}**! I'm **EnoX**, your assistant from **PFD Enorsia UK LTD**. How may I help you today?",
+        f"Welcome back, **{safe_name}**! I'm **EnoX** from **PFD Enorsia UK LTD**. Got a question about your order or anything else? I'm here!",
+        f"Hey **{safe_name}**! Great to have you here. I'm **EnoX**, PFD Enorsia's virtual assistant. What can I do for you today?",
+        f"Hello **{safe_name}**! I'm **EnoX** from **PFD Enorsia UK LTD**. Whether it's orders, returns, or products — I've got you covered. What do you need?",
+        f"Hi there, **{safe_name}**! I'm **EnoX**, your dedicated assistant at **PFD Enorsia UK LTD**. How can I assist you today?",
     ]
     return random.choice(messages)
 
@@ -269,7 +271,7 @@ def save_message(session_id: str, role: str, message: str, image_path: str | Non
 # ---------------------------
 PAGE_SIZE = 20
 
-def get_history(user_id: int, page: int = 1):
+def get_history(user_id: int, page: int = 1, session_id: str | None = None):
     conn = None
 
     try:
@@ -295,6 +297,22 @@ def get_history(user_id: int, page: int = 1):
                 user_id
             )
 
+            return {
+                "user": None,
+                "data": [],
+                "pagination": {
+                    "total_items": 0,
+                    "total_pages": 0,
+                    "current_page": page,
+                    "page_size": PAGE_SIZE,
+                }
+            }
+
+        if session_id and user["session_id"] != session_id:
+            logger.warning(
+                "DATABASE | session mismatch | user_id=%s",
+                user_id
+            )
             return {
                 "user": None,
                 "data": [],

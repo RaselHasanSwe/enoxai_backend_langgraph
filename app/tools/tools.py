@@ -25,10 +25,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Optional, List, get_args
 
-from dotenv import load_dotenv
 from langchain_core.tools import tool, ToolException
 from pydantic import EmailStr
 from functools import wraps
@@ -54,30 +52,37 @@ from app.models import (
     CategoryListInput,
 )
 from app.utils.utils import error_response, post_to_api, sanitize_optional_str, CREATE_SUPPORT_TICKET_DOC
-from app.config import get_settings
+from app.config import resolve_enox_api_key, resolve_enox_api_url
 from collections import defaultdict
 
-
-settings = get_settings()
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Shared config — resolved once at import time
+# Shared config — resolved per request from backend/.env
 # ---------------------------------------------------------------------------
 
-_BASE_URL: str = os.getenv("ENOX_API_URL", "")
-_HEADERS: dict = {
-    "X-INTERNAL-KEY": os.getenv("ENOX_API_KEY", ""),
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-}
+def _api_headers() -> dict:
+    return {
+        "X-INTERNAL-KEY": resolve_enox_api_key(),
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def _api_base_url() -> str:
+    return resolve_enox_api_url()
 
 
 def _api(endpoint: str, payload: dict) -> dict:
     """Thin wrapper so individual tools stay free of boilerplate."""
-    return post_to_api(endpoint, payload, _HEADERS, logger, base_url=_BASE_URL)
+    return post_to_api(
+        endpoint,
+        payload,
+        _api_headers(),
+        logger,
+        base_url=_api_base_url(),
+    )
 
 
 def _to_json(data: dict) -> str:

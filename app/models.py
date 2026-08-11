@@ -16,6 +16,8 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, EmailStr, field_validator
 from enum import StrEnum
 
+from app.utils.validators import validate_session_id
+
 
 # ===========================================================================
 # 1. FAQ / RAG models
@@ -51,7 +53,14 @@ class ChatRequest(BaseModel):
         default=None,
         description="Filter knowledge base search to a specific FAQ category.",
     )
-    image_base64: Optional[str] = Field(default=None)
+    image_base64: Optional[str] = Field(default=None, max_length=15_000_000)
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_session(cls, value: str) -> str:
+        if value == "default":
+            return value
+        return validate_session_id(value)
 
 
 
@@ -295,8 +304,8 @@ class ChatUser(BaseModel):
     session_id: str
 
 class ChatUserRequest(BaseModel):
-    name: str
-    email: str
+    name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr
 
 
 class ChatHistoryMessage(BaseModel):

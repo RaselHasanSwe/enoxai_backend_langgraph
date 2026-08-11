@@ -23,7 +23,7 @@ import json
 import logging
 import base64
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse, FileResponse
 
 from app.agent.graph import run_agent, stream_agent
@@ -37,6 +37,7 @@ from app.rag.engine import rag_engine
 from app.databases.chat_store import get_history, get_or_create_user
 from app.rag.product_image_engine import product_image_engine
 from app.utils.chat_images import get_chat_image_path
+from app.deps import require_admin_key
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from PIL import Image
@@ -79,7 +80,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 @router.post("/chat/stream", tags=["Chat"])
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
-    logger.info("Streaming request | request=%s", request)
+    logger.info(
+        "Streaming request | session=%s message_len=%s has_image=%s",
+        request.session_id,
+        len(request.message),
+        bool(request.image_base64),
+    )
     async def event_stream():
         try:
             async for chunk in stream_agent(request.message, request.session_id, request.image_base64):
@@ -106,7 +112,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 # Index management
 # ---------------------------------------------------------------------------
 
-@router.post("/index/build", response_model=IndexResponse, tags=["Index"])
+@router.post("/index/build", response_model=IndexResponse, tags=["Index"], dependencies=[Depends(require_admin_key)])
 async def build_index() -> IndexResponse:
     """Rebuild the FAISS + BM25 index from the current faq.json."""
     try:
@@ -116,7 +122,7 @@ async def build_index() -> IndexResponse:
         rag_engine.build_index()
     except Exception as exc:
         logger.exception("Index build failed")
-        raise HTTPException(status_code=500, detail=f"Index build failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Index build failed.") from exc
 
     return IndexResponse(
         status="rebuilt",
@@ -151,7 +157,7 @@ async def health() -> HealthResponse:
 # Debug
 # ---------------------------------------------------------------------------
 
-@router.post("/debug/retrieve", tags=["Debug"])
+@router.post("/debug/retrieve", tags=["Debug"], dependencies=[Depends(require_admin_key)])
 async def debug_retrieve(request: ChatRequest) -> dict:
     """
     Returns raw retrieval results with similarity scores — no LLM involved.
@@ -199,9 +205,10 @@ async def user(request: ChatUserRequest) -> ChatUser:
 @router.get("/chat/history", response_model=ChatHistoryResponse, tags=["Chat"])
 async def get_chat_history(
     user_id: int = Query(..., description="User ID"),
+    session_id: str = Query(..., description="User session ID"),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
 ) -> ChatHistoryResponse:
-    result = get_history(user_id=user_id, page=page)
+    result = get_history(user_id=user_id, page=page, session_id=session_id)
     return ChatHistoryResponse(
         user=result["user"],
         data=result["data"],
@@ -225,7 +232,7 @@ async def get_chat_upload(session_id: str, filename: str):
 # Image RAG Routes
 # ---------------------------------------------------------------------------
 
-@router.post("/image-index/build", response_model=ImageIndexResponse, tags=["Image Search"])
+@router.post("/image-index/build", response_model=ImageIndexResponse, tags=["Image Search"], dependencies=[Depends(require_admin_key)])
 async def build_image_index(limit: Optional[int] = None) -> ImageIndexResponse:
     """Rebuild the CLIP image FAISS index from product_images.json."""
     try:
@@ -234,7 +241,7 @@ async def build_image_index(limit: Optional[int] = None) -> ImageIndexResponse:
         )
     except Exception as exc:
         logger.exception("Image index build failed")
-        raise HTTPException(status_code=500, detail=f"Image index build failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Image index build failed.") from exc
  
     return ImageIndexResponse(
         status="rebuilt",
@@ -272,6 +279,8 @@ async def image_search(
         )
  
     contents = await file.read()
+    if len(contents) > settings.max_image_upload_bytes:
+        raise HTTPException(status_code=413, detail="Image file is too large.")
     try:
         image = Image.open(BytesIO(contents)).convert("RGB")
     except Exception as exc:
@@ -284,7 +293,7 @@ async def image_search(
         )
     except Exception as exc:
         logger.exception("Image search failed")
-        raise HTTPException(status_code=500, detail=f"Image search failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Image search failed.") from exc
  
     return ImageSearchResponse(
         top_k=effective_top_k,
@@ -324,6 +333,6 @@ async def image_search_base64(body: ImageSearchB64Request):
         )
     except Exception as exc:
         logger.exception("Image search failed")
-        raise HTTPException(status_code=500, detail=f"Image search failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Image search failed.") from exc
  
     return ImageSearchResponse(top_k=effective_top_k, results=results)
