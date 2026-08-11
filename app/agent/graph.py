@@ -28,9 +28,8 @@ from io import BytesIO
 from typing import AsyncIterator, Optional
 
 from langchain_openai import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage
+from langchain.schema import HumanMessage, SystemMessage, AIMessage
 from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.runnables import RunnableConfig
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain.globals import set_verbose, set_debug
@@ -40,7 +39,8 @@ from app.models import ImageSearchResult
 from app.config import get_settings
 from app.tools.tools import ALL_TOOLS
 from app.agent.prompt import _SYSTEM_PROMPT
-from app.databases.chat_store import save_message
+from app.agent.memory import agent_memory
+from app.databases.chat_store import save_message, get_recent_messages, AGENT_HISTORY_LIMIT
 from app.utils.chat_images import save_chat_image
 
 settings = get_settings()
@@ -54,8 +54,6 @@ logger = logging.getLogger(__name__)
 
 set_verbose(settings.debug_mode)
 #set_debug(True)
-
-agent_memory = MemorySaver()
 
 _llm = ChatOpenAI(
     model=settings.openai_model,
@@ -157,6 +155,43 @@ def extract_display_message(agent_response: str) -> str:
     return agent_response.strip()
 
 
+def build_history_messages(session_id: str) -> list:
+    """Rebuild LangGraph message history from persisted chat store."""
+    rows = get_recent_messages(session_id, limit=AGENT_HISTORY_LIMIT)
+    messages = []
+    for row in rows:
+        role = row["role"]
+        text = row["message"]
+        if role == "user":
+            messages.append(HumanMessage(content=text))
+        elif role == "ai":
+            messages.append(AIMessage(content=extract_display_message(text)))
+    return messages
+
+
+def build_agent_input(session_id: str, user_message: str, config: RunnableConfig) -> list:
+    """
+    Return messages for the next agent turn.
+
+    Uses the LangGraph checkpoint when available; otherwise hydrates from SQLite
+    so conversations survive server restarts.
+    """
+    state = _agent.get_state(config)
+    checkpoint_messages = []
+    if state and state.values:
+        checkpoint_messages = state.values.get("messages") or []
+
+    if checkpoint_messages:
+        return [HumanMessage(content=user_message)]
+
+    history_messages = build_history_messages(session_id)
+    if history_messages and isinstance(history_messages[-1], HumanMessage):
+        history_messages[-1] = HumanMessage(content=user_message)
+        return history_messages
+
+    return [HumanMessage(content=user_message)]
+
+
 def product_json_handler(product_data_to_emit: list[dict] | None, image_products: list[dict] | None, agent_response: str) -> list[dict] | None:
 
     if product_data_to_emit is not None or image_products is not None:
@@ -226,6 +261,7 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
     save_message(session_id, "user", message, image_path=user_image_path)
 
     config: RunnableConfig      = {"configurable": {"thread_id": session_id}}
+    input_messages = build_agent_input(session_id, augmented_message, config)
     tool_calls: list[str]       = []
     agent_response              = ""
     tool_name                   = None
@@ -235,7 +271,7 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
 
     try:
         async for msg_chunk, metadata in _agent.astream(
-            {"messages": [HumanMessage(content=augmented_message)]},
+            {"messages": input_messages},
             config=config,
             stream_mode="messages",
         ):
@@ -325,13 +361,14 @@ async def run_agent(message: str, session_id: str) -> dict:
     )
     save_message(session_id, "user", message)
     config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+    input_messages = build_agent_input(session_id, message, config)
 
     answer = ""
     tool_calls: list[str] = []
 
     try:
         result = await _agent.ainvoke(
-            {"messages": [HumanMessage(content=message)]},
+            {"messages": input_messages},
             config=config,
         )
         for msg in result.get("messages", []):

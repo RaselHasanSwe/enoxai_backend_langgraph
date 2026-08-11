@@ -270,6 +270,39 @@ def save_message(session_id: str, role: str, message: str, image_path: str | Non
 # GET HISTORY
 # ---------------------------
 PAGE_SIZE = 20
+AGENT_HISTORY_LIMIT = 40
+
+def get_recent_messages(session_id: str, limit: int = AGENT_HISTORY_LIMIT) -> list[dict]:
+    """Return recent chat rows oldest-first for agent memory hydration."""
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.execute(
+            """
+            SELECT cm.role, cm.message
+            FROM chat_messages cm
+            JOIN users u ON u.id = cm.user_id
+            WHERE u.session_id = ?
+            ORDER BY cm.id DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        )
+        rows = cursor.fetchall()
+        return [
+            {"role": row["role"], "message": row["message"]}
+            for row in reversed(rows)
+        ]
+    except Exception:
+        logger.exception(
+            "DATABASE | get_recent_messages failed | session_id=%s",
+            session_id,
+        )
+        return []
+    finally:
+        if conn:
+            conn.close()
+
 
 def get_history(user_id: int, page: int = 1, session_id: str | None = None):
     conn = None
