@@ -12,6 +12,16 @@ Run:
   uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 
+import os
+
+# FAISS and PyTorch both link OpenMP on macOS; without these, loading CLIP after
+# FAISS indices can deadlock or segfault (appears as a hang at startup).
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
