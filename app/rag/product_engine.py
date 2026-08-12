@@ -178,34 +178,48 @@ class ProductRAGEngine:
             # normalize for comparison: lowercase, strip, collapse separators
             return re.sub(r"[\s\-_]+", " ", s.strip().lower())
 
+        def _department_matches(filter_department: str, product_department: str) -> bool:
+            return _norm(filter_department) == _norm(product_department)
+
+        def _category_matches(filter_category: str, product_category: str) -> bool:
+            # Exact match only — substring checks (e.g. "shirts" in "sweatshirts")
+            # cause false positives across sibling categories.
+            return _norm(filter_category) == _norm(product_category)
+
+        def _title_matches_query(product_name: str, search_query: str) -> bool:
+            name_norm = _norm(product_name)
+            query_norm = _norm(search_query)
+            if not query_norm:
+                return False
+            if query_norm == name_norm:
+                return True
+            # Whole-token match so "shirt" does not match "sweatshirt".
+            tokens = [re.escape(token) for token in query_norm.split() if token]
+            if not tokens:
+                return False
+            pattern = r"(?<!\w)" + r"\s+".join(tokens) + r"(?!\w)"
+            return bool(re.search(pattern, name_norm))
+
         results: list[dict] = []
         seen: set[str] = set()
 
-        # ── PASS 0: Exact/substring category or title match — bypasses semantic threshold ──
+        # ── PASS 0: Deterministic department/category/title match — bypasses semantic threshold ──
         if category or query:
-            norm_category = _norm(category) if category else None
-            norm_query = _norm(query)
-
             for pid, p in self._id_map.items():
-                if department and p.get("department", "").lower() != department.lower():
+                if department and not _department_matches(department, p.get("department", "")):
                     continue
 
-                p_category_norm = _norm(p.get("category", ""))
-                p_name_norm = _norm(p.get("product_name", ""))
-
-                category_hit = norm_category and (
-                    norm_category == p_category_norm
-                    or norm_category in p_category_norm
-                    or p_category_norm in norm_category
+                category_hit = bool(
+                    category and _category_matches(category, p.get("category", ""))
                 )
-                title_hit = norm_query in p_name_norm or p_name_norm in norm_query
+                title_hit = bool(query and _title_matches_query(p.get("product_name", ""), query))
 
-                if not (category_hit or title_hit):
+                if category and not category_hit:
+                    continue
+                if not category and query and not title_hit:
                     continue
 
                 if in_stock_only and not p.get("in_stock", True):
-                    continue
-                if category and not category_hit:
                     continue
 
                 # apply remaining attribute filters
@@ -256,9 +270,9 @@ class ProductRAGEngine:
             if score is not None and score < threshold:
                 continue
 
-            if department and p.get("department", "").lower() != department.lower():
+            if department and not _department_matches(department, p.get("department", "")):
                 continue
-            if category and _norm(category) != _norm(p.get("category", "")):
+            if category and not _category_matches(category, p.get("category", "")):
                 continue
             if in_stock_only and not p.get("in_stock", True):
                 continue
