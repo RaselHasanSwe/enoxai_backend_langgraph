@@ -4,14 +4,8 @@ main.py
 FastAPI application entry point.
 """
 
-from pathlib import Path
-
-from dotenv import load_dotenv
-
-# Load backend/.env before any app imports that read settings.
-_ENV_FILE = Path(__file__).resolve().parent / ".env"
-if _ENV_FILE.is_file():
-    load_dotenv(_ENV_FILE, override=True)
+# Platform-specific env (OpenMP/MPS on macOS) must run before FAISS/PyTorch imports.
+import app.runtime_env  # noqa: F401
 
 from contextlib import asynccontextmanager
 

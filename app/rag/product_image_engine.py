@@ -5,8 +5,7 @@ CLIP-based product image similarity search.
 Mirrors the structure of your existing rag_engine / product_rag_engine.
 """
 
-import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import app.runtime_env  # noqa: F401 — before faiss/torch imports
 
 import json
 import pickle
@@ -57,6 +56,7 @@ class ProductImageRAGEngine:
             logger.warning("No CLIP model specified in settings")
             return
         logger.info("Loading CLIP model: %s", model_name)
+        torch.set_num_threads(1)
         self.clip_model = CLIPModel.from_pretrained(model_name)  # type: ignore
         self.clip_processor = CLIPProcessor.from_pretrained(model_name)  # type: ignore
         self.clip_model.eval()  # type: ignore[attr-defined]
