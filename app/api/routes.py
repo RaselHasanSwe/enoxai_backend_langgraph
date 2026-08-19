@@ -27,6 +27,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse, FileResponse
 
 from app.agent.graph import run_agent, stream_agent
+from app.databases.admin_store import get_conversation_by_session
 from app.models import (
     ChatRequest, ChatResponse, ChatUser, ChatUserRequest,
     HealthResponse, IndexResponse, ChatHistoryResponse,
@@ -59,6 +60,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
     """
     Send a message and receive a full JSON response.
     """
+    conv = get_conversation_by_session(request.session_id)
+    if conv and conv.get("status") in ("queued", "with_agent"):
+        raise HTTPException(
+            status_code=409,
+            detail="Session is in human handoff mode. Use /handoff/message instead.",
+        )
     try:
         result = await run_agent(
             message=request.message,
@@ -80,6 +87,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 @router.post("/chat/stream", tags=["Chat"])
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
+    conv = get_conversation_by_session(request.session_id)
+    if conv and conv.get("status") in ("queued", "with_agent"):
+        raise HTTPException(
+            status_code=409,
+            detail="Session is in human handoff mode. Use /handoff/message instead.",
+        )
     logger.info(
         "Streaming request | session=%s message_len=%s has_image=%s",
         request.session_id,

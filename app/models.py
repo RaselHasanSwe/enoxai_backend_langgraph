@@ -59,7 +59,7 @@ class ChatRequest(BaseModel):
     @classmethod
     def validate_session(cls, value: str) -> str:
         if value == "default":
-            return value
+            raise ValueError("session_id must be registered via POST /chat/user before chatting")
         return validate_session_id(value)
 
 
@@ -431,6 +431,76 @@ class ImageSearchResponse(BaseModel):
 class ImageSearchB64Request(BaseModel):
     image_base64: str
     top_k: Optional[int] = None
+
+
+# ===========================================================================
+# 8. Admin / handoff / analytics models
+# ===========================================================================
+
+class AdminLoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+
+
+class AdminRefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class AdminUserResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    role: str
+    is_online: Optional[int] = 0
+    last_seen_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class AdminTokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: AdminUserResponse
+
+
+class HandoffRequestBody(BaseModel):
+    session_id: str
+    reason: Optional[str] = None
+
+
+class HandoffMessageBody(BaseModel):
+    session_id: str
+    message: str = Field(..., min_length=1, max_length=2000)
+
+
+class AgentMessageBody(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+
+
+class AgentPresenceBody(BaseModel):
+    is_online: bool
+
+
+class FeedbackRequest(BaseModel):
+    session_id: str
+    rating: int = Field(..., ge=1, le=5)
+    comment: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ConversationTagsBody(BaseModel):
+    tags: List[str]
+
+
+class ConversationExportBody(BaseModel):
+    conversation_ids: Optional[List[int]] = None
+
+
+class BusinessHoursBody(BaseModel):
+    enabled: bool = True
+    timezone: str = "Europe/London"
+    days: dict
+    offline_message: str = ""
+
 
 # Resolve forward references
 CreateReturnInput.model_rebuild()

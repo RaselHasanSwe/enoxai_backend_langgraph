@@ -814,6 +814,45 @@ def create_support_ticket(
 
 
 # ===========================================================================
+# Tool — Human handoff
+# ===========================================================================
+
+@tool("request_human_handoff")
+def request_human_handoff(reason: str = "Customer requested live support") -> str:
+    """
+    Transfer the customer to a live human agent.
+
+    Use when the customer explicitly asks to speak with a human, or when you
+    cannot resolve their issue after trying other tools.
+    """
+    from app.agent.context import current_session_id
+    from app.databases.admin_store import request_handoff, is_within_business_hours, get_business_setting, DEFAULT_BUSINESS_HOURS
+
+    session_id = current_session_id.get()
+    if not session_id:
+        return json.dumps({"status": False, "message": "Session not available for handoff."})
+
+    if not is_within_business_hours():
+        from app.handoff.offline import build_off_hours_handoff_response
+        result = build_off_hours_handoff_response(session_id, reason)
+        return json.dumps({
+            "status": False,
+            "message": result.get("message"),
+            "support_ticket_created": result.get("support_ticket_created", False),
+        })
+
+    conv = request_handoff(session_id, reason)
+    if not conv:
+        return json.dumps({"status": False, "message": "Could not start handoff."})
+
+    return json.dumps({
+        "status": True,
+        "message": "You have been added to the queue. A human agent will join shortly.",
+        "conversation_id": conv["id"],
+    })
+
+
+# ===========================================================================
 # Complete tool registry — imported by graph.py
 # ===========================================================================
 
@@ -836,4 +875,5 @@ ALL_TOOLS = [
     search_products,            # Tool 16 — RAG (product catalogue)
     product_title_list,         # Tool 17
     find_product_category,       # Tool 18
+    request_human_handoff,      # Tool 19 — Live agent handoff
 ]

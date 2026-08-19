@@ -19,12 +19,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.api.admin_routes import router as admin_router
+from app.api.handoff_routes import router as handoff_router
+from app.api.ws_routes import router as ws_router
 from app.config import get_settings, reload_settings, resolve_enox_api_key, resolve_enox_api_url
+from app.middleware.admin_rbac import AdminRBACMiddleware
+from app.security.startup import validate_security_settings
 from app.rag.engine import rag_engine
 from app.utils.utils import configure_logging
 from app.databases.chat_store import init_db
+from app.databases.admin_store import seed_default_admin, set_business_setting, DEFAULT_BUSINESS_HOURS, get_business_setting
 from app.agent.memory import init_agent_memory, close_agent_memory
 from app.agent.graph import init_agent
+from app.jobs.queue_alerts import run_queue_alert_loop
 from app.rag.product_engine import product_rag_engine
 from app.rag.product_image_engine import product_image_engine
 from fastapi import Request
@@ -90,15 +97,36 @@ async def lifespan(app: FastAPI):
     print("[Startup] Initializing chat message database...")
 
     init_db()
+    seed_default_admin(
+        settings.admin_default_email,
+        settings.admin_default_password,
+        settings.admin_default_name,
+    )
+    if get_business_setting("business_hours") is None:
+        set_business_setting("business_hours", DEFAULT_BUSINESS_HOURS)
+
+    validate_security_settings(settings)
+
+    if settings.langsmith_tracing:
+        print(f"[Startup] LangSmith tracing enabled for project: {settings.langsmith_project}")
 
     print("[Startup] Initializing agent checkpoint storage...")
     await init_agent_memory()
     init_agent()
     print("[Startup] Agent checkpoint storage ready.")
+
+    import asyncio
+    alert_task = asyncio.create_task(run_queue_alert_loop())
+    print("[Startup] Queue alert monitor started.")
     
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────────────────
+    alert_task.cancel()
+    try:
+        await alert_task
+    except asyncio.CancelledError:
+        pass
     await close_agent_memory()
     print("[Shutdown] Goodbye.")
 
@@ -131,24 +159,29 @@ Two-path architecture:
 )
 
 # ---------------------------------------------------------------------------
-# CORS — configure allowed origins via CORS_ORIGINS env (comma-separated)
+# CORS — permissive in development; restrict via CORS_ORIGINS in production
 # ---------------------------------------------------------------------------
 
-_cors_origins = [
-    origin.strip()
-    for origin in settings.cors_origins.split(",")
-    if origin.strip()
-] or ["*"]
+if settings.strict_security_enabled():
+    _cors_origins = [
+        origin.strip()
+        for origin in settings.cors_origins.split(",")
+        if origin.strip()
+    ] or ["https://enorsia.com"]
+else:
+    _cors_origins = ["*"]
+
 _allow_credentials = "*" not in _cors_origins
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=_allow_credentials,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["*"],
 )
 
+app.add_middleware(AdminRBACMiddleware)
 app.add_middleware(RateLimitMiddleware)
 
 
@@ -172,6 +205,9 @@ async def maintenance_mode(request: Request, call_next):
     return response
 
 app.include_router(router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
+app.include_router(handoff_router, prefix="/api/v1")
+app.include_router(ws_router)
 
 
 @app.get("/", tags=["Root"])

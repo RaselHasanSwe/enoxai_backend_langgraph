@@ -23,6 +23,7 @@ import logging
 import json
 import base64
 import re
+import time
 from PIL import Image
 from io import BytesIO
 from typing import AsyncIterator, Optional
@@ -42,6 +43,7 @@ from app.agent.prompt import _SYSTEM_PROMPT
 from app.agent import memory as agent_memory_module
 from app.databases.chat_store import save_message, get_recent_messages, AGENT_HISTORY_LIMIT
 from app.utils.chat_images import save_chat_image
+from app.agent.context import current_session_id
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -291,6 +293,8 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
     product_data_to_emit: list[dict] | None = None
     final_product_data: list[dict] | None = None
     is_product_turn = bool(image_base64)
+    started_at = time.perf_counter()
+    token = current_session_id.set(session_id)
 
     try:
         async for msg_chunk, metadata in get_agent().astream(
@@ -329,7 +333,10 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
 
                 if msg_chunk.tool_calls:
                     for tc in msg_chunk.tool_calls:
-                        tool_calls.append(tc.get("name", "unknown"))
+                        name = tc.get("name", "unknown")
+                        tool_calls.append(name)
+                        from app.databases.admin_store import log_event
+                        log_event("tool_used", session_id=session_id, payload={"tool": name})
 
         # ── After stream ends, emit friendly message + product cards ──────
         if is_product_turn:
@@ -354,9 +361,22 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
         logger.exception("AGENT FAILED:stream_agent()  | session=%s", session_id)
         yield "\nSorry, something went wrong."
     finally:
+        latency_ms = int((time.perf_counter() - started_at) * 1000)
         if agent_response.strip():
             saved_message = build_ai_saved_message(agent_response, final_product_data)
-            save_message(session_id, "ai", saved_message)
+            metadata = {}
+            if final_product_data:
+                metadata["product_count"] = len(final_product_data)
+            save_message(
+                session_id,
+                "ai",
+                saved_message,
+                sender_type="ai",
+                tool_calls=tool_calls or None,
+                metadata=metadata or None,
+                latency_ms=latency_ms,
+            )
+        current_session_id.reset(token)
 
         logger.info(
             "AGENT RESPONSE:stream_agent()  | session=%s response=%s",
@@ -366,6 +386,15 @@ async def stream_agent(message: str, session_id: str, image_base64: Optional[str
             "AGENT TOOLS USED:stream_agent()  | session=%s tools=%s",
             session_id, tool_calls,
         )
+        if "request_human_handoff" in tool_calls:
+            try:
+                from app.ws.events import emit_handoff_requested
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(emit_handoff_requested(session_id))
+            except Exception:
+                logger.exception("Failed to emit handoff notification for session=%s", session_id)
 
 
 async def run_agent(message: str, session_id: str) -> dict:
@@ -388,6 +417,8 @@ async def run_agent(message: str, session_id: str) -> dict:
 
     answer = ""
     tool_calls: list[str] = []
+    started_at = time.perf_counter()
+    token = current_session_id.set(session_id)
 
     try:
         result = await get_agent().ainvoke(
@@ -410,8 +441,16 @@ async def run_agent(message: str, session_id: str) -> dict:
         logger.exception("AGENT FAILED:run_agent()  | session=%s", session_id)
         answer = "Sorry, something went wrong."
     finally:
+        latency_ms = int((time.perf_counter() - started_at) * 1000)
         if answer.strip():
-            save_message(session_id, "ai", answer)
+            save_message(
+                session_id,
+                "ai",
+                answer,
+                sender_type="ai",
+                tool_calls=tool_calls or None,
+                latency_ms=latency_ms,
+            )
         logger.info(
             "AGENT RESPONSE:run_agent()  | session=%s response=%s",
             session_id, answer,
@@ -419,6 +458,13 @@ async def run_agent(message: str, session_id: str) -> dict:
         logger.info(
             "AGENT TOOLS USED:run_agent()  | session=%s tools=%s",
             session_id, tool_calls,
-        )
+            )
+        if "request_human_handoff" in tool_calls:
+            try:
+                from app.ws.events import emit_handoff_requested
+                await emit_handoff_requested(session_id)
+            except Exception:
+                logger.exception("Failed to emit handoff notification for session=%s", session_id)
+        current_session_id.reset(token)
 
     return {"answer": answer, "tool_calls": tool_calls}

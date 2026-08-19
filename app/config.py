@@ -51,9 +51,29 @@ class Settings(BaseSettings):
     debug_mode: bool = False
     cors_origins: str = "*"
     admin_api_key: str = ""
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_minutes: int = 60
+    jwt_refresh_token_days: int = 7
+    admin_default_email: str = ""
+    admin_default_password: str = ""
+    admin_default_name: str = "Admin"
+    # When false, human handoff is allowed 24/7 (use for local/testing).
+    # When true, handoff is restricted by business_hours settings in DB/admin.
+    handoff_business_hours_enforced: bool = False
+    # Set true in real production deploys to require strong JWT/admin secrets.
+    strict_security_enforced: bool = False
+    alert_webhook_url: str = ""
+    queue_alert_minutes: int = 5
+    queue_alert_check_seconds: int = 60
     max_image_upload_bytes: int = 10_485_760  # 10 MB
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
+    handoff_rate_limit_requests: int | None = None
+    handoff_rate_limit_window_seconds: int = 900
+
+    # Optional future database URL (PostgreSQL). SQLite is used when unset.
+    database_url: str = ""
 
     # OpenAI
     openai_api_key: SecretStr = SecretStr("")
@@ -94,6 +114,28 @@ class Settings(BaseSettings):
     # Laravel backend
     enox_api_url: str = "http://localhost:8000"
     enox_api_key: str = ""
+
+
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in ("production", "prod")
+
+    def is_development(self) -> bool:
+        return not self.is_production()
+
+    def strict_security_enabled(self) -> bool:
+        """True only when explicitly enabled for a production deploy."""
+        return (
+            self.strict_security_enforced
+            and self.is_production()
+            and not self.debug_mode
+        )
+
+    def handoff_rate_limit_max(self) -> int:
+        if self.handoff_rate_limit_requests is not None:
+            return self.handoff_rate_limit_requests
+        if self.is_development() or self.debug_mode:
+            return 100
+        return 3
 
 
 @lru_cache()

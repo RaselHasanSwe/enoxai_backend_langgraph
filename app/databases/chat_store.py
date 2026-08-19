@@ -1,5 +1,7 @@
 from datetime import datetime
+import json
 from app.databases.config import get_connection
+from app.databases.admin_store import migrate_admin_schema, resolve_conversation_id, touch_conversation
 import logging
 import math
 from uuid import uuid4
@@ -52,8 +54,12 @@ def init_db():
         if "image_path" not in columns:
             conn.execute("ALTER TABLE chat_messages ADD COLUMN image_path TEXT")
 
+        migrate_admin_schema(conn)
+
         conn.commit()
         logger.info("DATABASE | initialized successfully")
+
+        _seed_admin_from_settings()
 
     except Exception:
         logger.exception("DATABASE | initialization failed")
@@ -61,6 +67,22 @@ def init_db():
     finally:
         if conn:
             conn.close()
+
+
+def _seed_admin_from_settings() -> None:
+    """Create default admin user when ADMIN_DEFAULT_* env vars are set."""
+    try:
+        from app.config import get_settings
+        from app.databases.admin_store import seed_default_admin
+
+        settings = get_settings()
+        seed_default_admin(
+            settings.admin_default_email,
+            settings.admin_default_password,
+            settings.admin_default_name,
+        )
+    except Exception:
+        logger.exception("DATABASE | admin seed failed")
 
 # ---------------------------
 # SAVE or GET USER
@@ -81,12 +103,13 @@ def get_welcome_message(user_name: str) -> str:
 
 def get_or_create_user(name: str, email: str) -> dict:
     conn = None
-    needs_greeting = False
+    greeting_session_id: str | None = None
+    greeting_message: str | None = None
+    result: dict | None = None
 
     try:
         conn = get_connection()
 
-        # Check existing user
         cursor = conn.execute(
             """
             SELECT id, name, email, session_id
@@ -106,7 +129,6 @@ def get_or_create_user(name: str, email: str) -> dict:
             )
             user_id = row["id"]
 
-            # Check last message timestamp
             last_msg_cursor = conn.execute(
                 """
                 SELECT timestamp
@@ -121,7 +143,6 @@ def get_or_create_user(name: str, email: str) -> dict:
             last_msg = last_msg_cursor.fetchone()
 
             if last_msg is None:
-                # Existing user but no messages yet
                 needs_greeting = True
             else:
                 last_time = datetime.fromisoformat(str(last_msg["timestamp"]))
@@ -129,54 +150,51 @@ def get_or_create_user(name: str, email: str) -> dict:
                 needs_greeting = hours_since >= 24
 
             if needs_greeting:
-                welcome_message = get_welcome_message(name)
-                save_message(row["session_id"], "ai", welcome_message)
+                greeting_session_id = row["session_id"]
+                greeting_message = get_welcome_message(name)
 
             logger.info(
                 "DATABASE | existing user found | email=%s user_id=%s needs_greeting=%s",
-                email, row["id"], needs_greeting
+                email, row["id"], bool(greeting_message),
             )
 
-            return {
+            result = {
                 "id": row["id"],
                 "name": row["name"],
                 "email": row["email"],
                 "session_id": row["session_id"]
             }
+            conn.commit()
 
-        # Generate session ID
-        session_id = str(uuid4())
-        needs_greeting = True
+        else:
+            session_id = str(uuid4())
 
-        # Create user
-        cursor = conn.execute(
-            """
-            INSERT INTO users (name, email, session_id)
-            VALUES (?, ?, ?)
-            """,
-            (name, email, session_id)
-        )
+            cursor = conn.execute(
+                """
+                INSERT INTO users (name, email, session_id)
+                VALUES (?, ?, ?)
+                """,
+                (name, email, session_id)
+            )
 
-        conn.commit()
+            conn.commit()
 
-        user_id = cursor.lastrowid
+            user_id = cursor.lastrowid
+            greeting_session_id = session_id
+            greeting_message = get_welcome_message(name)
 
-        if needs_greeting:
-            welcome_message = get_welcome_message(name)
-            save_message(session_id, "ai", welcome_message)
+            logger.info(
+                "DATABASE | new user created | user_id=%s email=%s",
+                user_id,
+                email
+            )
 
-        logger.info(
-            "DATABASE | new user created | user_id=%s email=%s",
-            user_id,
-            email
-        )
-
-        return {
-            "id": user_id,
-            "name": name,
-            "email": email,
-            "session_id": session_id
-        }
+            result = {
+                "id": user_id,
+                "name": name,
+                "email": email,
+                "session_id": session_id
+            }
 
     except Exception:
         logger.exception(
@@ -189,66 +207,100 @@ def get_or_create_user(name: str, email: str) -> dict:
         if conn:
             conn.close()
 
+    if greeting_session_id and greeting_message:
+        save_message(greeting_session_id, "ai", greeting_message)
+
+    return result  # type: ignore[return-value]
+
 
 # ---------------------------
 # SAVE MESSAGE
 # ---------------------------
-def save_message(session_id: str, role: str, message: str, image_path: str | None = None):
+def _sender_type_for_role(role: str) -> str:
+    if role == "ai":
+        return "ai"
+    if role == "agent":
+        return "agent"
+    if role == "system":
+        return "system"
+    return "user"
+
+
+def save_message(
+    session_id: str,
+    role: str,
+    message: str,
+    image_path: str | None = None,
+    *,
+    sender_type: str | None = None,
+    tool_calls: list[str] | None = None,
+    metadata: dict | None = None,
+    latency_ms: int | None = None,
+):
     conn = None
 
     try:
         conn = get_connection()
 
-        # Find user by session_id
         cursor = conn.execute(
-            """
-            SELECT id
-            FROM users
-            WHERE session_id = ?
-            """,
-            (session_id,)
+            "SELECT id FROM users WHERE session_id = ?",
+            (session_id,),
         )
-
         row = cursor.fetchone()
 
         if not row:
             logger.error(
                 "DATABASE | user not found | session_id=%s",
-                session_id
+                session_id,
             )
             return False
 
         user_id = row["id"]
+        conversation_id = resolve_conversation_id(conn, session_id)
+        effective_sender = sender_type or _sender_type_for_role(role)
 
-        # Save message
         conn.execute(
             """
             INSERT INTO chat_messages (
                 user_id,
+                conversation_id,
                 role,
+                sender_type,
                 message,
                 image_path,
+                tool_calls_json,
+                metadata_json,
+                latency_ms,
                 timestamp
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
+                conversation_id,
                 role,
+                effective_sender,
                 message,
                 image_path,
-                datetime.utcnow()
-            )
+                json.dumps(tool_calls) if tool_calls else None,
+                json.dumps(metadata) if metadata else None,
+                latency_ms,
+                datetime.utcnow(),
+            ),
         )
+
+        if conversation_id:
+            touch_conversation(conversation_id, conn)
 
         conn.commit()
 
         logger.info(
-            "DATABASE | message saved | user_id=%s role=%s length=%s has_image=%s",
+            "DATABASE | message saved | user_id=%s role=%s length=%s has_image=%s tools=%s",
             user_id,
             role,
             len(message),
             bool(image_path),
+            tool_calls or [],
         )
 
         return True
@@ -257,7 +309,7 @@ def save_message(session_id: str, role: str, message: str, image_path: str | Non
         logger.exception(
             "DATABASE | save message failed | session_id=%s role=%s",
             session_id,
-            role
+            role,
         )
         raise
 
